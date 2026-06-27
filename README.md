@@ -1,30 +1,31 @@
-## Devvit Phaser Starter
+## SiegeTheThread
 
-A starter to build web applications on Reddit's developer platform
+A collaborative subreddit dungeon-building and raiding game built on Reddit's developer platform.
 
-- [Devvit](https://developers.reddit.com/): A way to build and deploy immersive games on Reddit
-- [Vite](https://vite.dev/): For compiling the webView
-- [Phaser](https://phaser.io/): 2D game engine
-- [Hono](https://hono.dev/): For backend logic
-- [TypeScript](https://www.typescriptlang.org/): For type safety
+### Milestone 1: The Local Grid Blueprint Phase
 
-## Getting Started
+The defender phase - a fully local, client-side grid blueprint editor where subreddit members tap tiles to dig pathways out of a mountain, building the daily maze layout.
 
-> Make sure you have Node 22 downloaded on your machine before running!
+- **Grid**: 16×16 matrix (256 cells) of 32×32 pixel tiles
+- **Interaction**: Tap rock tiles (`0x222222`) to excavate into pathways (`0x555555`)
+- **Mobile**: 9:16 aspect ratio locked with `Phaser.Scale.FIT` scaling
+- **No external assets**: All tiles rendered as primitive Phaser rectangles
 
-1. Run `npm create devvit@latest --template=phaser`
-2. Go through the installation wizard. You will need to create a Reddit account and connect it to Reddit developers
-3. Copy the command on the success page into your terminal
+### Commands
 
-## Commands
-
-- `npm run dev`: Starts a development server where you can develop your application live on Reddit.
-- `npm run build`: Builds your client and server projects
+- `npm run dev`: Starts a development server for live playtesting via `devvit playtest`
+- `npm run build`: Builds client and server projects
 - `npm run deploy`: Uploads a new version of your app
 - `npm run launch`: Publishes your app for review
 - `npm run login`: Logs your CLI into Reddit
-- `npm run type-check`: Type checks, lints, and prettifies your app
+- `npm run type-check`: Type checks TypeScript
+- `npm run lint`: Lints source files
+- `npm run test`: Runs unit tests (10 tests, all pass)
 
-## Credits
+### Architecture
 
-Thanks to the Phaser team for [providing a great template](https://github.com/phaserjs/template-vite-ts)!
+- `src/shared/grid.ts`: Pure grid state model (unit-testable)
+- `src/client/game.ts`: Phaser game configuration
+- `src/client/scenes/GameScene.ts`: Grid rendering and interaction
+- `tests/milestone1.test.ts`: Unit tests for grid logic
+- `docs/MILESTONE_1.md`: Full technical documentation

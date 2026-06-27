@@ -4,7 +4,6 @@
   padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
-  color: #000000;
 }
 
 .app {
@@ -15,39 +14,90 @@
   align-items: center;
   height: 100vh;
   margin: 0;
-  gap: 16px;
+  gap: 20px;
+  padding: 20px;
+  background: radial-gradient(circle at 50% 18%, #1c2230 0%, #0b0d12 70%);
+  color: #f5f7fa;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.snoo {
-  object-fit: contain;
-  width: 50%;
-  max-width: 250px;
-  margin: 0 auto;
-}
-
-.content {
+.hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
 }
 
+.emblem {
+  font-size: 3.2em;
+  line-height: 1;
+}
+
 .title {
-  font-size: 1.5em;
-  font-weight: bold;
+  font-size: 1.8em;
+  font-weight: 800;
   text-align: center;
+  letter-spacing: 0.5px;
+  color: #ffd166;
 }
 
-.description {
-  font-size: 1em;
+.subtitle {
+  font-size: 0.95em;
   text-align: center;
-  color: #5c6c74;
+  color: #9aa6b2;
 }
 
-.code {
-  background-color: #e5ebee;
-  padding: 2px 4px;
-  border-radius: 4px;
+.onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 18px 20px;
+}
+
+.onboarding-heading {
+  font-size: 1.05em;
+  font-weight: 700;
+  color: #06d6a0;
+}
+
+.onboarding-body {
+  font-size: 0.95em;
+  line-height: 1.45;
+  color: #d7dee6;
+}
+
+.onboarding-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.onboarding-list li {
+  font-size: 0.88em;
+  color: #b6c0cb;
+  padding-left: 14px;
+  position: relative;
+}
+
+.onboarding-list li::before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  color: #ffd166;
+}
+
+.actions {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  justify-content: center;
 }
 
 .start-button {
@@ -56,31 +106,36 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  line-height: 1;
+  width: 100%;
+  min-height: 52px;
+  font-size: 1.15em;
+  font-weight: 700;
   border: none;
-  padding: 6px 16px;
-  height: 28px;
-  font-size: 1.1em;
-  border-radius: 12px;
+  border-radius: 14px;
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.start-button:active {
+  transform: scale(0.98);
+  background-color: #b32f00;
 }
 
 .footer {
   position: absolute;
-  bottom: 16px;
+  bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   gap: 12px;
   font-size: 0.8em;
-  color: #666666;
+  color: #6b7682;
 }
 
-.docs-link {
+.footer-link {
   cursor: pointer;
 }
 
 .divider {
-  color: rgba(0, 0, 0, 0.1);
+  color: rgba(255, 255, 255, 0.12);
 }
