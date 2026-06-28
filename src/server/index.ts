@@ -16,10 +16,10 @@ internal.route('/triggers', triggers);
 
 app.route('/internal', internal);
 
-// tRPC adapter — handles all /trpc/* requests with end-to-end type safety
-app.all('/trpc/*', (c) =>
+// tRPC adapter — handles all /api/trpc/* requests with end-to-end type safety
+app.all('/api/trpc/*', (c) =>
   fetchRequestHandler({
-    endpoint: '/trpc',
+    endpoint: '/api/trpc',
     req: c.req.raw,
     router: appRouter,
     onError: ({ path, error }) => {
