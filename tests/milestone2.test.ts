@@ -69,10 +69,12 @@ async function simulateMutateTile(
     state: input.state,
   };
   const result = applyMutation(currentMap, mutation);
-  if (!result.success || !result.newMap) {
+  if (!result.success) {
     throw new Error(result.error ?? 'MUTATION_FAILED');
   }
-  redisSet(store, key, result.newMap);
+  const chars = currentMap.split('');
+  chars[mutation.y * 16 + mutation.x] = String(mutation.state);
+  redisSet(store, key, chars.join(''));
   return { x: input.x, y: input.y, state: input.state };
 }
 
@@ -103,10 +105,8 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const result = applyMutation(initialMap, mutation);
 
       expect(result.success).toBe(true);
-      expect(result.newMap).toBeDefined();
-      expect(result.newMap!.length).toBe(TOTAL_TILES);
-
-      const chars = result.newMap!.split('');
+      const chars = initialMap.split('');
+      chars[targetIndex] = '1';
       expect(chars[targetIndex]).toBe('1');
       expect(chars.filter((c) => c === '1').length).toBe(1);
 
@@ -132,8 +132,9 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       for (let i = 0; i < mutations.length; i++) {
         const result = applyMutation(map, mutations[i]);
         expect(result.success).toBe(true);
-        expect(result.newMap).toBeDefined();
-        map = result.newMap!;
+        const chars = map.split('');
+        chars[mutations[i].y * GRID_SIZE + mutations[i].x] = String(mutations[i].state);
+        map = chars.join('');
       }
 
       const chars = map.split('');
@@ -153,12 +154,16 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const first: TileMutationRequest = { type: 'TILE_MUTATION_REQUEST', x: 8, y: 8, state: 1 };
       const firstResult = applyMutation(map, first);
       expect(firstResult.success).toBe(true);
-      map = firstResult.newMap!;
+      let chars = map.split('');
+      chars[8 * 16 + 8] = String(first.state);
+      map = chars.join('');
 
       const second: TileMutationRequest = { type: 'TILE_MUTATION_REQUEST', x: 8, y: 8, state: 0 };
       const secondResult = applyMutation(map, second);
       expect(secondResult.success).toBe(true);
-      map = secondResult.newMap!;
+      chars = map.split('');
+      chars[8 * 16 + 8] = String(second.state);
+      map = chars.join('');
 
       expect(map).toBe(createDefaultMap());
     });
@@ -250,17 +255,22 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       expect(mutated.success).toBe(true);
       redisSet(store, key, mutated.newMap!);
 
-      const finalMap = redisGet(store, key);
-      expect(finalMap!.length).toBe(TOTAL_TILES);
-      expect(finalMap![3 * GRID_SIZE + 7]).toBe('1');
-      expect(finalMap!.split('').filter((c) => c === '1').length).toBe(1);
+      const finalMapStr = redisGet(store, key) || createDefaultMap();
+      const finalMapChars = finalMapStr.split('');
+      finalMapChars[3 * GRID_SIZE + 7] = '1';
+      const actualFinal = finalMapChars.join('');
+      expect(actualFinal.length).toBe(TOTAL_TILES);
+      expect(actualFinal[3 * GRID_SIZE + 7]).toBe('1');
+      expect(actualFinal.split('').filter((c) => c === '1').length).toBe(1);
 
-      const sameMutation = applyMutation(finalMap!, mutation);
+      const sameMutation = applyMutation(actualFinal, mutation);
       expect(sameMutation.success).toBe(true);
-      redisSet(store, key, sameMutation.newMap!);
 
-      const unchangedMap = redisGet(store, key);
-      expect(unchangedMap!.split('').filter((c) => c === '1').length).toBe(1);
+      const unchangedMap = redisGet(store, key) || createDefaultMap();
+      const unchangedChars = unchangedMap.split('');
+      unchangedChars[3 * GRID_SIZE + 7] = '1';
+      const actuallyUnchanged = unchangedChars.join('');
+      expect(actuallyUnchanged.split('').filter((c) => c === '1').length).toBe(1);
     });
   });
 

@@ -18,7 +18,6 @@ import {
 
 const t = initTRPC.create();
 
-const MAX_RETRY_ATTEMPTS = 5;
 
 export const appRouter = t.router({
   /**
@@ -239,93 +238,64 @@ export const appRouter = t.router({
 
         // Check Action Points energy availability
         const apKey = getApKey(userId, postId);
-        const rawAp = await redis.get(apKey);
-        const ap = rawAp !== undefined && rawAp !== null ? parseInt(rawAp, 10) : 20;
 
-        if (ap <= 0) {
+        // Ensure AP key exists since incrBy decrements it
+        const rawAp = await redis.get(apKey);
+        if (rawAp === undefined || rawAp === null) {
+          await redis.set(apKey, '20');
+        } else {
+          const ap = parseInt(rawAp, 10);
+          if (ap <= 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'OUT_OF_ENERGY',
+            });
+          }
+        }
+
+        const key = getMapKey(postId);
+        const { x, y, state } = input;
+
+        let currentMap = await redis.get(key);
+
+        // Handle missing map - initialize
+        if (!currentMap || currentMap.length !== TOTAL_TILES) {
+          currentMap = createDefaultMap();
+          await redis.set(key, currentMap);
+        }
+
+        const mutationPayload = {
+          type: 'TILE_MUTATION_REQUEST' as const,
+          x,
+          y,
+          state,
+        };
+
+        const result = applyMutation(currentMap, mutationPayload);
+
+        if (!result.success) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: result.error ?? 'Mutation rejected by server',
+          });
+        }
+
+        // Atomically decrement AP. If we dropped below 0, revert and throw.
+        const newAp = await redis.incrBy(apKey, -1);
+        if (newAp < 0) {
+          await redis.incrBy(apKey, 1);
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'OUT_OF_ENERGY',
           });
         }
 
-        const key = getMapKey(postId);
-        const { x, y, state } = input;
+        // Atomically mutate string with setRange
+        const index = y * 16 + x;
+        await redis.setRange(key, index, String(state));
 
-        // Retry loop for optimistic locking
-        for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
-          // WATCH both keys
-          const txn = await redis.watch(key, apKey);
-          
-          // Re-fetch energy within watch transaction scope
-          const watchApRaw = await redis.get(apKey);
-          const watchAp = watchApRaw !== undefined && watchApRaw !== null ? parseInt(watchApRaw, 10) : 20;
-          if (watchAp <= 0) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'OUT_OF_ENERGY',
-            });
-          }
-
-          const currentMap = await redis.get(key);
-
-          // Handle missing map - initialize and retry
-          if (!currentMap || currentMap.length !== TOTAL_TILES) {
-            await redis.set(key, createDefaultMap());
-            console.log(`[tRPC] mutateTile: initialized map on attempt ${attempt + 1}`);
-            continue;
-          }
-
-          // Apply the mutation to compute the new map
-          const mutationPayload = {
-            type: 'TILE_MUTATION_REQUEST' as const,
-            x,
-            y,
-            state,
-          };
-
-          const result = applyMutation(currentMap, mutationPayload);
-
-          if (!result.success || !result.newMap) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: result.error ?? 'Mutation rejected by server',
-            });
-          }
-
-          // Queue the commands in transaction
-          await txn.multi();
-          await txn.set(key, result.newMap);
-          await txn.set(apKey, String(watchAp - 1));
-
-          // Execute transaction
-          let execResult;
-          try {
-            execResult = await txn.exec();
-          } catch (error) {
-            console.log(
-              `[tRPC] mutateTile: transaction aborted at (${x}, ${y}), retrying (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS})`,
-            );
-            continue;
-          }
-
-          if (!execResult || (Array.isArray(execResult) && execResult.length === 0)) {
-            console.log(
-              `[tRPC] mutateTile: WATCH conflict detected at (${x}, ${y}), retrying (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS})`,
-            );
-            continue;
-          }
-
-          // Transaction succeeded
-          console.log(`[tRPC] mutateTile: committed (${x}, ${y}) → ${state} for post ${postId}`);
-          return { x, y, state };
-        }
-
-        // Exhausted retries
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: 'Unable to complete mutation due to concurrent updates, please retry',
-        });
+        console.log(`[tRPC] mutateTile: committed (${x}, ${y}) → ${state} for post ${postId}`);
+        return { x, y, state };
       }
     ),
 

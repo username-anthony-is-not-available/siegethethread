@@ -30,10 +30,5 @@ export function applyMutation(
     return { success: false, error: 'CORRUPT_MAP' };
   }
 
-  const index = y * GRID_SIZE + x;
-  const chars = currentMap.split('');
-  chars[index] = String(state);
-  const newMap = chars.join('');
-
-  return { success: true, newMap };
+  return { success: true };
 }

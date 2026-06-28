@@ -126,7 +126,7 @@ async function mockMutateTile(
     state: input.state,
   });
 
-  if (!result.success || !result.newMap) {
+  if (!result.success) {
     throw new Error(result.error ?? 'MUTATION_FAILED');
   }
 
