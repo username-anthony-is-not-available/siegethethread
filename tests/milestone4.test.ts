@@ -97,4 +97,24 @@ describe('Milestone 4: Algorithmic Pathfinding & Swarm Simulation Engine', () =>
     expect(deadEndSwarm?.count).toBe(50);
     expect(reachedVaultSwarm?.count).toBe(50);
   });
+
+  it('should not vanish a micro-swarm of size 1 at a 2-way split', () => {
+    const grid = Array(16).fill(null).map(() => Array(16).fill(0));
+    grid[0][0] = 1;
+    grid[0][1] = 1;
+    grid[0][2] = 1;
+    grid[1][1] = 1;
+    const mapString = grid.map(row => row.join('')).join('');
+    const result = runSwarmSimulation(mapString, false, 1);
+
+    expect(result.frames[0]?.swarms).toEqual([{ x: 0, y: 0, count: 1 }]);
+    expect(result.frames[1]?.swarms).toEqual([{ x: 1, y: 0, count: 1 }]);
+
+    const frame2Swarms = result.frames[2]?.swarms;
+    expect(frame2Swarms?.length).toBe(1);
+    expect(frame2Swarms?.[0].count).toBe(1);
+    const isPathA = frame2Swarms?.[0].x === 2 && frame2Swarms?.[0].y === 0;
+    const isPathB = frame2Swarms?.[0].x === 1 && frame2Swarms?.[0].y === 1;
+    expect(isPathA || isPathB).toBe(true);
+  });
 });
