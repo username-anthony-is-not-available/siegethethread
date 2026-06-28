@@ -3,8 +3,10 @@
 // in isolation from the WebGL rendering context.
 
 export const GRID_SIZE = 16;
-export const TILE_WALL = 0;
-export const TILE_PATH = 1;
+export const TILE_WALL = 1;
+export const TILE_PATH = 0;
+export const TILE_TOWER = 2;
+export const TILE_TRAP = 3;
 export const TOTAL_TILES = GRID_SIZE * GRID_SIZE;
 
 export type Grid = number[][];
@@ -61,7 +63,7 @@ export function toggleTile(grid: Grid, row: number, col: number): Grid {
   if (current === undefined) {
     return grid;
   }
-  rowCells[col] = current === TILE_WALL ? TILE_PATH : TILE_WALL;
+  rowCells[col] = (current + 1) % 4;
   return next;
 }
 

@@ -27,7 +27,7 @@ export function runRaidSimulation(mapString: string): SimulationResult {
     const row: number[] = [];
     for (let c = 0; c < GRID_SIZE; c++) {
       const char = mapString[r * GRID_SIZE + c];
-      row.push(char === '1' ? 1 : 0);
+      row.push((char === '0' || char === '3') ? 1 : 0);
     }
     grid.push(row);
   }
@@ -129,7 +129,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     for (let c = 0; c < GRID_SIZE; c++) {
       const idx = r * GRID_SIZE + c;
       const char = mapString[idx] ?? '0';
-      row.push(char === '1' ? 1 : 0);
+      row.push((char === '0' || char === '3') ? 1 : 0);
     }
     grid.push(row);
   }
@@ -146,34 +146,17 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     };
   }
 
-  // Identify traps and towers deterministically
+  // Identify traps and towers from the multi-state map layout
   const trapCoords: Array<{ x: number; y: number }> = [];
   const towerCoords: Array<{ x: number; y: number }> = [];
-  let towerCount = 0;
 
   for (let r = 0; r < GRID_SIZE; r++) {
     for (let c = 0; c < GRID_SIZE; c++) {
-      if (grid[r]?.[c] === 0 && towerCount < 4 && r > 2 && c > 2) {
-        let hasAdjPath = false;
-        const neighbors = [
-          { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 }
-        ];
-        for (const n of neighbors) {
-          if (n.r >= 0 && n.r < GRID_SIZE && n.c >= 0 && n.c < GRID_SIZE) {
-            if (grid[n.r]?.[n.c] === 1) {
-              hasAdjPath = true;
-              break;
-            }
-          }
-        }
-        if (hasAdjPath) {
-          towerCoords.push({ x: c, y: r });
-          towerCount++;
-        }
-      } else if (grid[r]?.[c] === 1 && trapCoords.length < 4 && r > 1 && c > 1 && (r !== 15 || c !== 15)) {
-        if ((r + c) % 5 === 0) {
-          trapCoords.push({ x: c, y: r });
-        }
+      const char = mapString[r * GRID_SIZE + c];
+      if (char === '2') {
+        towerCoords.push({ x: c, y: r });
+      } else if (char === '3') {
+        trapCoords.push({ x: c, y: r });
       }
     }
   }
@@ -184,6 +167,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     count: number;
     visited: Set<string>;
     status: 'moving' | 'reached' | 'deadend';
+    delayTicks?: number;
   };
 
   const startVisited = new Set<string>();
@@ -196,6 +180,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
       count: initialCount,
       visited: startVisited,
       status: 'moving',
+      delayTicks: 0,
     },
   ];
 
@@ -226,6 +211,10 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     const nextSwarms: SwarmState[] = [];
 
     for (const swarm of currentSwarms) {
+      if (swarm.delayTicks && swarm.delayTicks > 0) {
+        nextSwarms.push({ ...swarm, delayTicks: swarm.delayTicks - 1 });
+        continue;
+      }
       if (swarm.status === 'reached' || swarm.status === 'deadend' || swarm.count <= 0) {
         nextSwarms.push(swarm);
         continue;
@@ -270,10 +259,12 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
 
             // Calculate damage from traps & towers
             let damage = 0;
+            let newDelayTicks = 0;
             if (applyDamage) {
               const isTrap = trapCoords.some(tc => tc.x === move.x && tc.y === move.y);
               if (isTrap) {
                 damage += 5; // Balanced trap damage
+                newDelayTicks = 2; // Reduced movement velocity
               }
               for (const tower of towerCoords) {
                 const distSq = (tower.x - move.x) ** 2 + (tower.y - move.y) ** 2;
@@ -292,6 +283,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
               count: nextCount,
               visited: newVisited,
               status: status,
+              delayTicks: newDelayTicks,
             });
           }
         }
@@ -301,7 +293,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     const mergedSwarmsMap = new Map<string, SwarmState>();
     for (const swarm of nextSwarms) {
       // Group by spatial coordinates (x, y) to prevent exponential array growth
-      const key = `${swarm.x},${swarm.y},${swarm.status}`;
+      const key = `${swarm.x},${swarm.y},${swarm.status},${swarm.delayTicks || 0}`;
       if (mergedSwarmsMap.has(key)) {
         const existing = mergedSwarmsMap.get(key)!;
         existing.count += swarm.count;

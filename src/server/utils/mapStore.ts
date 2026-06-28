@@ -9,7 +9,7 @@ export function getMapKey(postId: string): string {
 }
 
 export function createDefaultMap(): string {
-  return '0'.repeat(TOTAL_TILES);
+  return '1'.repeat(TOTAL_TILES);
 }
 
 export function applyMutation(
@@ -22,7 +22,7 @@ export function applyMutation(
     return { success: false, error: 'OUT_OF_BOUNDS' };
   }
 
-  if (state !== 0 && state !== 1) {
+  if (typeof state !== 'number' || isNaN(state) || state < 0 || state > 3) {
     return { success: false, error: 'INVALID_STATE' };
   }
 

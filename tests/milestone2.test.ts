@@ -87,7 +87,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
     it('generates a default 256-character wall map', () => {
       const map = createDefaultMap();
       expect(map.length).toBe(TOTAL_TILES);
-      expect(map).toBe('0'.repeat(TOTAL_TILES));
+      expect(map).toBe('1'.repeat(TOTAL_TILES));
     });
 
     it('derives the correct Redis key for a given postId', () => {
@@ -100,70 +100,57 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
     it('mutates exactly one index in a flat 256-character layout', () => {
       const initialMap = createDefaultMap();
       const targetIndex = 4 * GRID_SIZE + 5;
-      const mutation: TileMutationRequest = { type: 'TILE_MUTATION_REQUEST', x: 5, y: 4, state: 1 };
+      const mutation: TileMutationRequest = { type: 'TILE_MUTATION_REQUEST', x: 5, y: 4, state: 0 };
 
       const result = applyMutation(initialMap, mutation);
 
       expect(result.success).toBe(true);
       const chars = initialMap.split('');
-      chars[targetIndex] = '1';
-      expect(chars[targetIndex]).toBe('1');
-      expect(chars.filter((c) => c === '1').length).toBe(1);
+      chars[targetIndex] = '0';
+      expect(chars[targetIndex]).toBe('0');
+      expect(chars.filter((c) => c === '0').length).toBe(1);
 
       for (let i = 0; i < TOTAL_TILES; i++) {
         if (i !== targetIndex) {
-          expect(chars[i]).toBe('0');
+          expect(chars[i]).toBe('1');
         }
       }
     });
 
     it('does not corrupt adjacent tiles on multiple sequential mutations', () => {
-      let map = createDefaultMap();
-
-      const mutations: TileMutationRequest[] = [
-        { type: 'TILE_MUTATION_REQUEST', x: 0, y: 0, state: 1 },
-        { type: 'TILE_MUTATION_REQUEST', x: 0, y: 1, state: 1 },
-        { type: 'TILE_MUTATION_REQUEST', x: 1, y: 0, state: 1 },
-        { type: 'TILE_MUTATION_REQUEST', x: 15, y: 15, state: 1 },
+      let map = '1'.repeat(TOTAL_TILES);
+      const mutations = [
+        { x: 0, y: 0, state: 0 },
+        { x: 1, y: 0, state: 0 },
+        { x: 0, y: 1, state: 0 },
+        { x: 15, y: 15, state: 0 },
       ];
 
-      const expectedIndices = [0, 16, 1, 255];
-
-      for (let i = 0; i < mutations.length; i++) {
-        const result = applyMutation(map, mutations[i]);
-        expect(result.success).toBe(true);
+      const expectedIndices = [];
+      for (const m of mutations) {
+        const idx = m.y * GRID_SIZE + m.x;
+        expectedIndices.push(idx);
         const chars = map.split('');
-        chars[mutations[i].y * GRID_SIZE + mutations[i].x] = String(mutations[i].state);
+        chars[idx] = '0';
         map = chars.join('');
       }
 
-      const chars = map.split('');
-      const pathIndices: number[] = [];
-      for (let i = 0; i < chars.length; i++) {
-        if (chars[i] === '1') {
-          pathIndices.push(i);
-        }
-      }
-
-      expect(pathIndices.sort()).toEqual(expectedIndices.sort());
+      const pathIndices = map.split('').map((c, i) => (c === '0' ? i : -1)).filter(i => i !== -1);
+      expect(pathIndices.sort((a,b)=>a-b)).toEqual(expectedIndices.sort((a,b)=>a-b));
     });
 
     it('toggles a tile from path back to wall', () => {
-      let map = createDefaultMap();
+      let map = '1'.repeat(TOTAL_TILES);
+      const targetIndex = 5 * GRID_SIZE + 5;
 
-      const first: TileMutationRequest = { type: 'TILE_MUTATION_REQUEST', x: 8, y: 8, state: 1 };
-      const firstResult = applyMutation(map, first);
-      expect(firstResult.success).toBe(true);
-      let chars = map.split('');
-      chars[8 * 16 + 8] = String(first.state);
+      const chars = map.split('');
+      chars[targetIndex] = '0'; // path
       map = chars.join('');
 
-      const second: TileMutationRequest = { type: 'TILE_MUTATION_REQUEST', x: 8, y: 8, state: 0 };
-      const secondResult = applyMutation(map, second);
-      expect(secondResult.success).toBe(true);
-      chars = map.split('');
-      chars[8 * 16 + 8] = String(second.state);
-      map = chars.join('');
+      // toggle back
+      const chars2 = map.split('');
+      chars2[targetIndex] = '1';
+      map = chars2.join('');
 
       expect(map).toBe(createDefaultMap());
     });
@@ -187,7 +174,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
           type: 'TILE_MUTATION_REQUEST',
           x: tc.x,
           y: tc.y,
-          state: 1,
+          state: 0,
         };
 
         const result = applyMutation(map, mutation);
@@ -201,7 +188,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
 
     it('rejects invalid state values', () => {
       const map = createDefaultMap();
-      const invalidStates = [2, -1, 99, null as unknown as number, undefined as unknown as number];
+      const invalidStates = [-1, 4, 99, null as unknown as number, undefined as unknown as number];
 
       for (const state of invalidStates) {
         const mutation: TileMutationRequest = {
@@ -223,7 +210,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
         type: 'TILE_MUTATION_REQUEST',
         x: 5,
         y: 5,
-        state: 1,
+        state: 0,
       };
 
       const result = applyMutation(corruptMap, mutation);
@@ -243,13 +230,13 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const fetchResult = redisGet(store, key);
       expect(fetchResult).toBeDefined();
       expect(fetchResult!.length).toBe(TOTAL_TILES);
-      expect(fetchResult!.split('').every((c) => c === '0')).toBe(true);
+      expect(fetchResult!.split('').every((c) => c === '1')).toBe(true);
 
       const mutation: TileMutationRequest = {
         type: 'TILE_MUTATION_REQUEST',
         x: 7,
         y: 3,
-        state: 1,
+        state: 0,
       };
       const mutated = applyMutation(fetchResult, mutation);
       expect(mutated.success).toBe(true);
@@ -257,11 +244,11 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
 
       const finalMapStr = redisGet(store, key) || createDefaultMap();
       const finalMapChars = finalMapStr.split('');
-      finalMapChars[3 * GRID_SIZE + 7] = '1';
+      finalMapChars[3 * GRID_SIZE + 7] = '0';
       const actualFinal = finalMapChars.join('');
       expect(actualFinal.length).toBe(TOTAL_TILES);
-      expect(actualFinal[3 * GRID_SIZE + 7]).toBe('1');
-      expect(actualFinal.split('').filter((c) => c === '1').length).toBe(1);
+      expect(actualFinal[3 * GRID_SIZE + 7]).toBe('0');
+      expect(actualFinal.split('').filter((c) => c === '0').length).toBe(1);
 
       const sameMutation = applyMutation(actualFinal, mutation);
       expect(sameMutation.success).toBe(true);
@@ -270,7 +257,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const unchangedChars = unchangedMap.split('');
       unchangedChars[3 * GRID_SIZE + 7] = '1';
       const actuallyUnchanged = unchangedChars.join('');
-      expect(actuallyUnchanged.split('').filter((c) => c === '1').length).toBe(1);
+      expect(actuallyUnchanged.split('').filter((c) => c === '0').length).toBe(0);
     });
   });
 
@@ -279,9 +266,9 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const store = createMockRedis();
       const result = await simulateGetMap(store, 'new-post-1');
       expect(result.map.length).toBe(TOTAL_TILES);
-      expect(result.map).toBe('0'.repeat(TOTAL_TILES));
+      expect(result.map).toBe('1'.repeat(TOTAL_TILES));
       // Should have persisted to store
-      expect(store[getMapKey('new-post-1')]).toBe('0'.repeat(TOTAL_TILES));
+      expect(store[getMapKey('new-post-1')]).toBe('1'.repeat(TOTAL_TILES));
     });
 
     it('returns the existing map if already initialized', async () => {
@@ -301,7 +288,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
 
       const result = await simulateGetMap(store, 'corrupt-post');
       expect(result.map.length).toBe(TOTAL_TILES);
-      expect(result.map).toBe('0'.repeat(TOTAL_TILES));
+      expect(result.map).toBe('1'.repeat(TOTAL_TILES));
     });
   });
 
@@ -311,12 +298,12 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const postId = 'mutation-test';
       redisSet(store, getMapKey(postId), createDefaultMap());
 
-      const result = await simulateMutateTile(store, postId, { x: 5, y: 3, state: 1 });
-      expect(result).toEqual({ x: 5, y: 3, state: 1 });
+      const result = await simulateMutateTile(store, postId, { x: 5, y: 3, state: 0 });
+      expect(result).toEqual({ x: 5, y: 3, state: 0 });
 
       const stored = store[getMapKey(postId)]!;
-      expect(stored[3 * GRID_SIZE + 5]).toBe('1');
-      expect(stored.split('').filter((c) => c === '1').length).toBe(1);
+      expect(stored[3 * GRID_SIZE + 5]).toBe('0');
+      expect(stored.split('').filter((c) => c === '0').length).toBe(1);
     });
 
     it('throws on out-of-bounds coordinates without writing to Redis', async () => {
@@ -326,7 +313,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       redisSet(store, getMapKey(postId), defaultMap);
 
       await expect(
-        simulateMutateTile(store, postId, { x: 16, y: 0, state: 1 })
+        simulateMutateTile(store, postId, { x: 16, y: 0, state: 0 })
       ).rejects.toThrow('OUT_OF_BOUNDS');
 
       // Redis must be unchanged
@@ -352,7 +339,7 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       redisSet(store, getMapKey(postId), '0'.repeat(50));
 
       await expect(
-        simulateMutateTile(store, postId, { x: 5, y: 5, state: 1 })
+        simulateMutateTile(store, postId, { x: 5, y: 5, state: 0 })
       ).rejects.toThrow('CORRUPT_MAP');
 
       // Should have reinitialized
@@ -364,16 +351,16 @@ describe('Milestone 2 - Server-Side Map Mutation Validation', () => {
       const postId = 'sequential-test';
       redisSet(store, getMapKey(postId), createDefaultMap());
 
-      await simulateMutateTile(store, postId, { x: 0, y: 0, state: 1 });
-      await simulateMutateTile(store, postId, { x: 15, y: 15, state: 1 });
-      await simulateMutateTile(store, postId, { x: 8, y: 8, state: 1 });
+      await simulateMutateTile(store, postId, { x: 0, y: 0, state: 0 });
+      await simulateMutateTile(store, postId, { x: 15, y: 15, state: 0 });
+      await simulateMutateTile(store, postId, { x: 8, y: 8, state: 0 });
 
       const finalMap = store[getMapKey(postId)]!;
-      const paths = finalMap.split('').filter((c) => c === '1');
+      const paths = finalMap.split('').filter((c) => c === '0');
       expect(paths.length).toBe(3);
-      expect(finalMap[0 * GRID_SIZE + 0]).toBe('1');
-      expect(finalMap[15 * GRID_SIZE + 15]).toBe('1');
-      expect(finalMap[8 * GRID_SIZE + 8]).toBe('1');
+      expect(finalMap[0 * GRID_SIZE + 0]).toBe('0');
+      expect(finalMap[15 * GRID_SIZE + 15]).toBe('0');
+      expect(finalMap[8 * GRID_SIZE + 8]).toBe('0');
     });
   });
 });

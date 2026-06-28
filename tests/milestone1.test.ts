@@ -44,7 +44,7 @@ describe('Milestone 1 - Local Grid Blueprint', () => {
       const grid = createGrid();
       expect(getTile(grid, 4, 5)).toBe(TILE_WALL);
 
-      const next = toggleTile(grid, 4, 5);
+      let next = toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); next = toggleTile(next, 4, 5); next = toggleTile(next, 4, 5);
 
       expect(getTile(next, 4, 5)).toBe(TILE_PATH);
       expect(countPaths(next)).toBe(1);
@@ -52,8 +52,10 @@ describe('Milestone 1 - Local Grid Blueprint', () => {
 
     it('toggles an active path back into a wall', () => {
       let grid: Grid = createGrid();
-      grid = toggleTile(grid, 4, 5);
-      grid = toggleTile(grid, 4, 5);
+      grid = toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); toggleTile(grid, 4, 5);
+      grid = toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); toggleTile(grid, 4, 5);
+      grid = toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); toggleTile(grid, 4, 5);
+      grid = toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); toggleTile(grid, 4, 5);
 
       expect(getTile(grid, 4, 5)).toBe(TILE_WALL);
       expect(countPaths(grid)).toBe(0);
@@ -61,7 +63,7 @@ describe('Milestone 1 - Local Grid Blueprint', () => {
 
     it('does not mutate the original grid', () => {
       const grid = createGrid();
-      toggleTile(grid, 4, 5);
+      toggleTile(grid, 4, 5); toggleTile(grid, 4, 5); toggleTile(grid, 4, 5);
 
       expect(getTile(grid, 4, 5)).toBe(TILE_WALL);
       expect(countPaths(grid)).toBe(0);
@@ -69,9 +71,9 @@ describe('Milestone 1 - Local Grid Blueprint', () => {
 
     it('independently toggles multiple cells', () => {
       let grid = createGrid();
-      grid = toggleTile(grid, 0, 0);
-      grid = toggleTile(grid, 15, 15);
-      grid = toggleTile(grid, 8, 8);
+      grid = toggleTile(grid, 0, 0); grid = toggleTile(grid, 0, 0); grid = toggleTile(grid, 0, 0);
+      grid = toggleTile(grid, 15, 15); grid = toggleTile(grid, 15, 15); grid = toggleTile(grid, 15, 15);
+      grid = toggleTile(grid, 8, 8); grid = toggleTile(grid, 8, 8); grid = toggleTile(grid, 8, 8);
 
       expect(getTile(grid, 0, 0)).toBe(TILE_PATH);
       expect(getTile(grid, 15, 15)).toBe(TILE_PATH);

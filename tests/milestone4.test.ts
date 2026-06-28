@@ -3,21 +3,21 @@ import { runSwarmSimulation } from '../src/server/utils/simulation';
 
 describe('Milestone 4: Algorithmic Pathfinding & Swarm Simulation Engine', () => {
   it('should return a defender victory on a completely sealed map', () => {
-    const sealedMap = '0'.repeat(256);
+    const sealedMap = '1'.repeat(256);
     const result = runSwarmSimulation(sealedMap);
     expect(result.victory).toBe('Defender');
     expect(result.frames[0]?.swarms.length).toBe(0);
   });
 
   it('should return an attacker victory on a corridor map to the vault', () => {
-    const grid = Array(16).fill(null).map(() => Array(16).fill(0));
+    const grid = Array(16).fill(null).map(() => Array(16).fill(1));
     // Path from (0,0) down to (15,0)
     for (let y = 0; y <= 15; y++) {
-      grid[y][0] = 1;
+      grid[y][0] = 0;
     }
     // Path from (15,0) to (15,15)
     for (let x = 0; x <= 15; x++) {
-      grid[15][x] = 1;
+      grid[15][x] = 0;
     }
     const mapString = grid.map(row => row.join('')).join('');
     const result = runSwarmSimulation(mapString);
@@ -31,13 +31,13 @@ describe('Milestone 4: Algorithmic Pathfinding & Swarm Simulation Engine', () =>
 
   it('should split a swarm of 100 units into 50/50 at a T-junction', () => {
     // 16x16 grid initialized to walls '0'
-    const grid = Array(16).fill(null).map(() => Array(16).fill(0));
+    const grid = Array(16).fill(null).map(() => Array(16).fill(1));
     
     // Walkable path: (0,0) -> (0,1) -> T-junction splitting to (0,2) and (1,1)
-    grid[0][0] = 1;
-    grid[0][1] = 1;
-    grid[0][2] = 1;
-    grid[1][1] = 1;
+    grid[0][0] = 0;
+    grid[0][1] = 0;
+    grid[0][2] = 0;
+    grid[1][1] = 0;
 
     // Convert 2D grid to flat map string
     const mapString = grid.map(row => row.join('')).join('');
@@ -61,23 +61,23 @@ describe('Milestone 4: Algorithmic Pathfinding & Swarm Simulation Engine', () =>
 
   it('should terminate a sub-swarm at a dead-end while the parallel branch reaches the vault', () => {
     // 16x16 grid initialized to walls '0'
-    const grid = Array(16).fill(null).map(() => Array(16).fill(0));
+    const grid = Array(16).fill(null).map(() => Array(16).fill(1));
     
     // Path:
     // (0,0) -> (0,1)
     // At (0,1) split into:
     // Branch A (dead end): (0,2)
     // Branch B (to vault): (1,1) -> (2,1) -> ... -> (15,1) -> (15,2) -> ... -> (15,15)
-    grid[0][0] = 1;
-    grid[0][1] = 1;
-    grid[0][2] = 1;
+    grid[0][0] = 0;
+    grid[0][1] = 0;
+    grid[0][2] = 0;
 
     // Build path to vault for Branch B
     for (let y = 1; y <= 15; y++) {
-      grid[y][1] = 1;
+      grid[y][1] = 0;
     }
     for (let x = 2; x <= 15; x++) {
-      grid[15][x] = 1;
+      grid[15][x] = 0;
     }
 
     const mapString = grid.map(row => row.join('')).join('');
@@ -99,11 +99,11 @@ describe('Milestone 4: Algorithmic Pathfinding & Swarm Simulation Engine', () =>
   });
 
   it('should not vanish a micro-swarm of size 1 at a 2-way split', () => {
-    const grid = Array(16).fill(null).map(() => Array(16).fill(0));
-    grid[0][0] = 1;
-    grid[0][1] = 1;
-    grid[0][2] = 1;
-    grid[1][1] = 1;
+    const grid = Array(16).fill(null).map(() => Array(16).fill(1));
+    grid[0][0] = 0;
+    grid[0][1] = 0;
+    grid[0][2] = 0;
+    grid[1][1] = 0;
     const mapString = grid.map(row => row.join('')).join('');
     const result = runSwarmSimulation(mapString, false, 1);
 
