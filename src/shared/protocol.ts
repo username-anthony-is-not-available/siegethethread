@@ -21,6 +21,58 @@ export type TileMutationRequest = {
   state: number;
 };
 
+// Profile types
+export type PlayerClass = 'Barbarian' | 'Sorcerer' | 'Rogue';
+export type PlayerRole = 'Attacker' | 'Defender';
+
+export type PlayerProfile = {
+  class: PlayerClass;
+  role: PlayerRole;
+  level: number;
+  xp: number;
+};
+
+export type ProfileStatusResponse = {
+  hasProfile: boolean;
+  profile: PlayerProfile | null;
+  remainingAp: number;
+  totalAp: number;
+};
+
+export function getProfileKey(userId: string): string {
+  return `player:profile:${userId}`;
+}
+
+export function getApKey(userId: string, postId: string): string {
+  return `player:ap:${userId}:${postId}`;
+}
+
+export type InitializeProfileRequest = {
+  chosenClass: PlayerClass;
+  chosenRole: PlayerRole;
+};
+
+export type EnergyResponse = {
+  remainingAp: number;
+  totalAp: number;
+};
+
+export type DebugSetPlayerRoleRequest = {
+  targetRole: PlayerRole;
+};
+
+export type MatchmakerSimulationResponse = {
+  path: [number, number][];
+  success: boolean;
+};
+
+export type DebugFullResetResponse = {
+  profile: null;
+  map: string;
+  remainingAp: number;
+  totalAp: number;
+};
+
 // ---------------------------------------------------------------------------
 // Server → Client (tRPC outputs)
 // ---------------------------------------------------------------------------
@@ -56,3 +108,4 @@ export type ServerToClientMessage =
   | FetchMapResponse
   | TileMutationSuccess
   | TileMutationError;
+

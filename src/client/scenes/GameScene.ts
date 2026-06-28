@@ -12,6 +12,7 @@ import {
   type Grid,
 } from '../../shared/grid';
 import { trpc } from '../trpc';
+import type { PlayerClass, PlayerRole } from '../../shared/protocol';
 
 const TILE_SIZE = 32;
 const GRID_PIXELS = GRID_SIZE * TILE_SIZE;
@@ -30,6 +31,7 @@ export class GameScene extends Scene {
   private modeLabel: GameObjects.Text | null = null;
   private counterLabel: GameObjects.Text | null = null;
   private statusLabel: GameObjects.Text | null = null;
+  private energyLabel: GameObjects.Text | null = null;
   private originX = 0;
   private originY = 0;
   private pendingMutations = new Set<string>();
@@ -41,6 +43,35 @@ export class GameScene extends Scene {
   private exitButtonText: GameObjects.Text | null = null;
   private canvasClickListener: ((ev: MouseEvent) => void) | null = null;
 
+  // Debug UI
+  private debugBtn: GameObjects.Text | null = null;
+  private debugPanel: GameObjects.Container | null = null;
+  private isDebugExpanded = false;
+
+  // Onboarding overlay container and objects
+  private onboardingContainer: GameObjects.Container | null = null;
+  private chosenClass: PlayerClass = 'Barbarian';
+  private chosenRole: PlayerRole = 'Defender';
+  private remainingAp = 0;
+  private totalAp = 0;
+  private userRole: PlayerRole | null = null;
+
+  // Cinematic Replay state & assets
+  private swarmSprites: Array<{
+    container: GameObjects.Container;
+    circle: GameObjects.Arc | GameObjects.Sprite;
+    text: GameObjects.Text;
+    x: number;
+    y: number;
+    count: number;
+    active: boolean;
+  }> = [];
+  private vaultChest: GameObjects.Container | null = null;
+  private towerSprites: GameObjects.Container[] = [];
+  private trapIndicators: GameObjects.Container[] = [];
+  private rewardModalContainer: GameObjects.Container | null = null;
+  private auraEmitter: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
+
   constructor() {
     super('GameScene');
   }
@@ -51,6 +82,7 @@ export class GameScene extends Scene {
     this.modeLabel = null;
     this.counterLabel = null;
     this.statusLabel = null;
+    this.energyLabel = null;
     this.pendingMutations.clear();
     this.isMapLoaded = false;
     this.exitRequested = false;
@@ -58,6 +90,77 @@ export class GameScene extends Scene {
     this.exitButtonBg = null;
     this.exitButtonText = null;
     this.canvasClickListener = null;
+    this.debugBtn = null;
+    this.debugPanel = null;
+    this.isDebugExpanded = false;
+    this.onboardingContainer = null;
+    this.userRole = null;
+
+    // Reset cinematic replay objects
+    this.swarmSprites = [];
+    this.vaultChest = null;
+    this.towerSprites = [];
+    this.trapIndicators = [];
+    this.rewardModalContainer = null;
+    this.auraEmitter = null;
+  }
+
+  preload(): void {
+    // 1. Asset Loss Safeguards: Generate fallback textures if loading fails or for default use
+    const graphics = this.make.graphics({ x: 0, y: 0 }, false);
+
+    // Fallback: Swarm Node
+    graphics.fillStyle(0x00f0ff, 1);
+    graphics.fillCircle(12, 12, 10);
+    graphics.lineStyle(1.5, 0xffffff, 1);
+    graphics.strokeCircle(12, 12, 10);
+    graphics.generateTexture('swarm_fallback', 24, 24);
+    graphics.clear();
+
+    // Fallback: Particle Dot
+    graphics.fillStyle(0xff7700, 1);
+    graphics.fillCircle(4, 4, 3);
+    graphics.generateTexture('particle_dot', 8, 8);
+    graphics.clear();
+
+    // Fallback: Blue/Cyan Particle Dot
+    graphics.fillStyle(0x00f0ff, 1);
+    graphics.fillCircle(4, 4, 3);
+    graphics.generateTexture('particle_blue', 8, 8);
+    graphics.clear();
+
+    // Fallback: Vault (Treasure Chest Box)
+    graphics.fillStyle(0xffd166, 1);
+    graphics.fillRect(2, 2, 28, 28);
+    graphics.lineStyle(2, 0x111622, 1);
+    graphics.strokeRect(2, 2, 28, 28);
+    graphics.fillStyle(0x111622, 1);
+    graphics.fillRect(12, 12, 8, 12);
+    graphics.generateTexture('vault_fallback', 32, 32);
+    graphics.clear();
+
+    // Fallback: Trap indicator (Skull / Spikes cross)
+    graphics.lineStyle(2, 0xef233c, 1);
+    graphics.strokeLineShape(new Phaser.Geom.Line(4, 4, 28, 28));
+    graphics.strokeLineShape(new Phaser.Geom.Line(4, 28, 28, 4));
+    graphics.fillStyle(0xef233c, 0.4);
+    graphics.fillRect(4, 4, 24, 24);
+    graphics.generateTexture('trap_fallback', 32, 32);
+    graphics.clear();
+
+    // Fallback: Defense Tower
+    graphics.fillStyle(0x8d99ae, 1);
+    graphics.fillRect(4, 0, 24, 32);
+    graphics.fillStyle(0xd90429, 1);
+    graphics.fillRect(8, 4, 16, 10);
+    graphics.generateTexture('tower_fallback', 32, 32);
+    graphics.clear();
+
+    // Fallback: Tower Projectile Arrow / Dot
+    graphics.fillStyle(0xffd166, 1);
+    graphics.fillCircle(3, 3, 3);
+    graphics.generateTexture('projectile_fallback', 6, 6);
+    graphics.clear();
   }
 
   create(): void {
@@ -72,7 +175,7 @@ export class GameScene extends Scene {
     this.buildOverlay(width);
 
     // Show a loading indicator while waiting for the server
-    this.showStatus('Loading map…', 0xffd166);
+    this.showStatus('Checking player status…', 0xffd166);
 
     this.scale.on('resize', this.handleResize, this);
 
@@ -84,8 +187,215 @@ export class GameScene extends Scene {
     };
     this.sys.game.canvas.addEventListener('click', this.canvasClickListener);
 
-    // Asynchronously fetch the map — grid renders only after server responds
+    // Run Pre-Flight check
+    this.preFlightCheck();
+
+    // Initialize the debug panel
+    this.buildDebugPanel();
+  }
+
+  private preFlightCheck(): void {
+    trpc.getProfileStatus.query()
+      .then((status) => {
+        if (!status.hasProfile || !status.profile) {
+          this.clearStatus();
+          this.showOnboardingOverlay();
+        } else {
+          this.userRole = status.profile.role;
+          this.remainingAp = status.remainingAp;
+          this.totalAp = status.totalAp;
+          this.clearStatus();
+          this.loadGameContent();
+        }
+      })
+      .catch((err) => {
+        console.error('[GameScene] Profile status check failed:', err);
+        this.showStatus('Profile check failed. Tap to retry.', ERROR_COLOR);
+        this.input.once('pointerdown', () => this.preFlightCheck());
+      });
+  }
+
+  private loadGameContent(): void {
     this.fetchInitialMap();
+    this.fetchEnergyStatus();
+  }
+
+  private fetchEnergyStatus(): void {
+    trpc.getRemainingEnergy.query()
+      .then((result) => {
+        this.remainingAp = result.remainingAp;
+        this.totalAp = result.totalAp;
+        this.updateEnergyHud();
+      })
+      .catch((err) => {
+        console.error('[GameScene] Error loading energy:', err);
+      });
+  }
+
+  private updateEnergyHud(): void {
+    if (!this.energyLabel) {
+      return;
+    }
+    if (this.userRole !== 'Defender') {
+      this.energyLabel.setText('⚔️ Attacker Mode (View Only)');
+      return;
+    }
+    if (this.remainingAp <= 0) {
+      this.energyLabel.setText('⚡ Energy: 0 / 20 AP (OUT OF ENERGY!)');
+      this.energyLabel.setStyle({ color: '#ef233c' });
+    } else {
+      this.energyLabel.setText(`⚡ Energy: ${this.remainingAp} / ${this.totalAp} AP`);
+      this.energyLabel.setStyle({ color: '#06d6a0' });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // High-fidelity Onboarding UI
+  // ---------------------------------------------------------------------------
+
+  private showOnboardingOverlay(): void {
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    this.onboardingContainer = this.add.container(0, 0).setDepth(20);
+
+    // Semi-transparent backdrop
+    const bg = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.85);
+    this.onboardingContainer.add(bg);
+
+    // Modal panel card
+    const modalWidth = 480;
+    const modalHeight = 360;
+    const panel = this.add.rectangle(width / 2, height / 2, modalWidth, modalHeight, 0x161a22)
+      .setStrokeStyle(2, 0xffd166);
+    this.onboardingContainer.add(panel);
+
+    const title = this.add.text(width / 2, height / 2 - 140, 'CHARACTER CREATION', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '24px',
+      color: '#ffd166',
+    }).setOrigin(0.5);
+    this.onboardingContainer.add(title);
+
+    // Class selection title
+    const classTitle = this.add.text(width / 2, height / 2 - 90, 'Choose Your Diablo Class', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '14px',
+      color: '#a0aab2',
+    }).setOrigin(0.5);
+    this.onboardingContainer.add(classTitle);
+
+    // Option containers for Barbarian, Sorcerer, Rogue
+    const classes: PlayerClass[] = ['Barbarian', 'Sorcerer', 'Rogue'];
+    const classButtons: GameObjects.Rectangle[] = [];
+    const classTexts: GameObjects.Text[] = [];
+
+    classes.forEach((className, idx) => {
+      const x = width / 2 - 120 + idx * 120;
+      const y = height / 2 - 40;
+
+      const btn = this.add.rectangle(x, y, 100, 50, 0x222831)
+        .setStrokeStyle(1, className === this.chosenClass ? 0xffd166 : 0x4f5d75)
+        .setInteractive({ useHandCursor: true });
+      
+      const txt = this.add.text(x, y, className, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: className === this.chosenClass ? '#ffd166' : '#ffffff',
+      }).setOrigin(0.5);
+
+      btn.on('pointerdown', () => {
+        this.chosenClass = className;
+        classButtons.forEach((b, i) => {
+          const isSelected = classes[i] === this.chosenClass;
+          b.setStrokeStyle(1, isSelected ? 0xffd166 : 0x4f5d75);
+          classTexts[i]?.setStyle({ color: isSelected ? '#ffd166' : '#ffffff' });
+        });
+      });
+
+      this.onboardingContainer?.add(btn);
+      this.onboardingContainer?.add(txt);
+      classButtons.push(btn);
+      classTexts.push(txt);
+    });
+
+    // Role selection title
+    const roleTitle = this.add.text(width / 2, height / 2 + 30, 'Choose Daily Operational Role', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '14px',
+      color: '#a0aab2',
+    }).setOrigin(0.5);
+    this.onboardingContainer.add(roleTitle);
+
+    // Role Pickers: Raid Attacker vs Build Defender
+    const roles: PlayerRole[] = ['Attacker', 'Defender'];
+    const roleLabels = ['⚔️ Attacker', '🛡️ Defender'];
+    const roleButtons: GameObjects.Rectangle[] = [];
+    const roleTexts: GameObjects.Text[] = [];
+
+    roles.forEach((roleName, idx) => {
+      const x = width / 2 - 80 + idx * 160;
+      const y = height / 2 + 75;
+
+      const btn = this.add.rectangle(x, y, 130, 44, 0x222831)
+        .setStrokeStyle(1, roleName === this.chosenRole ? 0xffd166 : 0x4f5d75)
+        .setInteractive({ useHandCursor: true });
+
+      const txt = this.add.text(x, y, roleLabels[idx] ?? roleName, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '14px',
+        color: roleName === this.chosenRole ? '#ffd166' : '#ffffff',
+      }).setOrigin(0.5);
+
+      btn.on('pointerdown', () => {
+        this.chosenRole = roleName;
+        roleButtons.forEach((b, i) => {
+          const isSelected = roles[i] === this.chosenRole;
+          b.setStrokeStyle(1, isSelected ? 0xffd166 : 0x4f5d75);
+          roleTexts[i]?.setStyle({ color: isSelected ? '#ffd166' : '#ffffff' });
+        });
+      });
+
+      this.onboardingContainer?.add(btn);
+      this.onboardingContainer?.add(txt);
+      roleButtons.push(btn);
+      roleTexts.push(txt);
+    });
+
+    // Submit button
+    const submitBtn = this.add.rectangle(width / 2, height / 2 + 140, 160, 40, 0x06d6a0)
+      .setInteractive({ useHandCursor: true });
+    const submitTxt = this.add.text(width / 2, height / 2 + 140, 'ENTER DUNGEON', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '14px',
+      color: '#161a22',
+    }).setOrigin(0.5);
+
+    submitBtn.on('pointerover', () => submitBtn.setFillStyle(0x05c493));
+    submitBtn.on('pointerout', () => submitBtn.setFillStyle(0x06d6a0));
+
+    submitBtn.on('pointerdown', () => {
+      submitBtn.disableInteractive();
+      this.showStatus('Saving profile…', 0xffd166);
+      trpc.initializeProfile.mutate({
+        chosenClass: this.chosenClass,
+        chosenRole: this.chosenRole,
+      })
+      .then((profile) => {
+        this.userRole = profile.role;
+        this.clearStatus();
+        this.onboardingContainer?.destroy();
+        this.loadGameContent();
+      })
+      .catch((err) => {
+        console.error('[GameScene] Failed to initialize profile:', err);
+        this.showStatus('Failed to create profile. Try again.', ERROR_COLOR);
+        submitBtn.setInteractive({ useHandCursor: true });
+      });
+    });
+
+    this.onboardingContainer.add(submitBtn);
+    this.onboardingContainer.add(submitTxt);
   }
 
   // ---------------------------------------------------------------------------
@@ -177,8 +487,19 @@ export class GameScene extends Scene {
     };
 
     this.modeLabel = this.add
-      .text(width / 2, this.originY - 40, MODE_LABEL, labelStyle)
+      .text(width / 2, this.originY - 45, MODE_LABEL, labelStyle)
       .setOrigin(0.5);
+    
+    this.energyLabel = this.add
+      .text(width / 2, this.originY - 15, '⚡ Energy: -- / 20 AP', {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '14px',
+        color: '#06d6a0',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5);
+
     this.counterLabel = this.add
       .text(width / 2, this.originY + GRID_PIXELS + 40, '', counterStyle)
       .setOrigin(0.5);
@@ -228,6 +549,18 @@ export class GameScene extends Scene {
       return;
     }
 
+    if (this.userRole !== 'Defender') {
+      this.showStatus('ONLY DEFENDERS CAN DIG!', ERROR_COLOR);
+      this.time.delayedCall(1500, () => this.clearStatus());
+      return;
+    }
+
+    if (this.remainingAp <= 0) {
+      this.showStatus('OUT OF ENERGY!', ERROR_COLOR);
+      this.time.delayedCall(1500, () => this.clearStatus());
+      return;
+    }
+
     const currentState = this.grid[row]?.[col] ?? TILE_WALL;
     const desiredState = currentState === TILE_WALL ? TILE_PATH : TILE_WALL;
 
@@ -245,17 +578,23 @@ export class GameScene extends Scene {
       .mutate({ x: col, y: row, state: desiredState })
       .then((result: { x: number; y: number; state: number }) => {
         console.log(`[GameScene] TILE_MUTATION_SUCCESS (${result.x}, ${result.y}) → ${result.state}`);
+        this.remainingAp = Math.max(0, this.remainingAp - 1);
+        this.updateEnergyHud();
         this.finalizeTile(result.y, result.x, result.state);
       })
       .catch((err: unknown) => {
-        const httpStatus = (err as { shape?: { data?: { httpStatus?: number } } }).shape?.data?.httpStatus ?? 'unknown';
-        console.error(`[GameScene] TILE_MUTATION failed for (${col}, ${row}) (HTTP: ${httpStatus}):`, err);
+        console.error(`[GameScene] TILE_MUTATION failed for (${col}, ${row}):`, err);
+        
+        this.showStatus('OUT OF ENERGY OR WRONG ROLE!', ERROR_COLOR);
+        this.time.delayedCall(2000, () => this.clearStatus());
+
         const revertRow = this.grid[row];
         if (revertRow) {
           revertRow[col] = currentState;
         }
         this.revertTile(row, col, currentState);
         this.updateCounter();
+        this.fetchEnergyStatus();
       });
   }
 
@@ -421,7 +760,10 @@ export class GameScene extends Scene {
     }
 
     if (this.modeLabel) {
-      this.modeLabel.setPosition(width / 2, this.originY - 40);
+      this.modeLabel.setPosition(width / 2, this.originY - 45);
+    }
+    if (this.energyLabel) {
+      this.energyLabel.setPosition(width / 2, this.originY - 15);
     }
     if (this.counterLabel) {
       this.counterLabel.setPosition(width / 2, this.originY + GRID_PIXELS + 40);
@@ -435,11 +777,831 @@ export class GameScene extends Scene {
     if (this.exitButtonText) {
       this.exitButtonText.setPosition(width - 90, 30);
     }
+
+    this.buildDebugPanel();
+  }
+
+  private buildDebugPanel(): void {
+    if (this.debugBtn) {
+      this.debugBtn.destroy();
+    }
+    if (this.debugPanel) {
+      this.debugPanel.destroy();
+    }
+
+    const btnX = 20;
+    const btnY = 20;
+
+    this.debugBtn = this.add.text(btnX, btnY, '⚙️ DEBUG', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '14px',
+      color: '#ffffff',
+      backgroundColor: '#1d2433',
+      padding: { x: 10, y: 6 }
+    })
+    .setInteractive({ useHandCursor: true })
+    .setDepth(30);
+
+    this.debugBtn.on('pointerover', () => this.debugBtn?.setStyle({ color: '#ffd166' }));
+    this.debugBtn.on('pointerout', () => this.debugBtn?.setStyle({ color: '#ffffff' }));
+    this.debugBtn.on('pointerdown', () => {
+      this.isDebugExpanded = !this.isDebugExpanded;
+      this.debugPanel?.setVisible(this.isDebugExpanded);
+    });
+
+    this.debugPanel = this.add.container(btnX, btnY + 40).setDepth(30).setVisible(this.isDebugExpanded);
+
+    const panelBg = this.add.rectangle(110, 75, 220, 140, 0x111622)
+      .setStrokeStyle(2, 0xffd166);
+    this.debugPanel.add(panelBg);
+
+    const toggleBtn = this.add.text(10, 15, 'Toggle Role', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#ffffff',
+      backgroundColor: '#222831',
+      padding: { x: 8, y: 4 }
+    })
+    .setInteractive({ useHandCursor: true });
+    
+    toggleBtn.on('pointerdown', () => {
+      const nextRole = this.userRole === 'Defender' ? 'Attacker' : 'Defender';
+      trpc.debug_setPlayerRole.mutate({ targetRole: nextRole })
+        .then((profile) => {
+          this.userRole = profile.role;
+          this.remainingAp = nextRole === 'Defender' ? 20 : 0;
+          this.updateEnergyHud();
+          this.showStatus(`Role set to ${profile.role}!`, 0x06d6a0);
+          this.time.delayedCall(1500, () => this.clearStatus());
+          this.fetchInitialMap(); // Refresh map/state
+        })
+        .catch((err) => {
+          console.error('[Debug] Failed to toggle role:', err);
+          this.showStatus('Debug failed', ERROR_COLOR);
+        });
+    });
+    this.debugPanel.add(toggleBtn);
+
+    const refillBtn = this.add.text(110, 15, 'Refill AP', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#ffffff',
+      backgroundColor: '#222831',
+      padding: { x: 8, y: 4 }
+    })
+    .setInteractive({ useHandCursor: true });
+
+    refillBtn.on('pointerdown', () => {
+      trpc.debug_refillEnergy.mutate()
+        .then((result) => {
+          this.remainingAp = result.remainingAp;
+          this.totalAp = result.totalAp;
+          this.updateEnergyHud();
+          this.showStatus('AP Refilled to 20!', 0x06d6a0);
+          this.time.delayedCall(1500, () => this.clearStatus());
+        })
+        .catch((err) => {
+          console.error('[Debug] Failed to refill energy:', err);
+          this.showStatus('Debug failed', ERROR_COLOR);
+        });
+    });
+    this.debugPanel.add(refillBtn);
+
+    const simBtn = this.add.text(10, 55, 'Trigger Matchmaker Now', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#ffffff',
+      backgroundColor: '#222831',
+      padding: { x: 8, y: 4 }
+    })
+    .setInteractive({ useHandCursor: true });
+
+    simBtn.on('pointerdown', () => {
+      let apiDone = false;
+      let minDurationElapsed = false;
+      let matchResult: {
+        victory: 'Attacker' | 'Defender';
+        frames: Array<{
+          tick: number;
+          swarms: Array<{ x: number; y: number; count: number }>;
+        }>;
+        success: boolean;
+      } | null = null;
+
+      const overlayController = this.showMatchmakingOverlay(() => {
+        if (matchResult) {
+          this.playCinematicReplay({
+            victory: matchResult.victory,
+            frames: matchResult.frames,
+          });
+        }
+      });
+
+      trpc.debug_triggerMatchmakerSimulation.mutate()
+        .then((res) => {
+          matchResult = res;
+          apiDone = true;
+          if (minDurationElapsed) {
+            overlayController.proceedToMatchFound();
+          }
+        })
+        .catch((err) => {
+          console.error('[Debug] Failed to run matchmaker simulation:', err);
+          overlayController.cancel();
+          this.showStatus('Debug failed', ERROR_COLOR);
+          this.time.delayedCall(1500, () => this.clearStatus());
+        });
+
+      // Enforce a minimum of 1.5 seconds of searching animation for dramatic timing
+      this.time.delayedCall(1500, () => {
+        minDurationElapsed = true;
+        if (apiDone && matchResult) {
+          overlayController.proceedToMatchFound();
+        }
+      });
+    });
+    this.debugPanel.add(simBtn);
+
+    const resetBtn = this.add.text(10, 95, 'Full Reset', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '12px',
+      color: '#ffffff',
+      backgroundColor: '#ef233c',
+      padding: { x: 8, y: 4 }
+    })
+    .setInteractive({ useHandCursor: true });
+
+    resetBtn.on('pointerdown', () => {
+      this.showStatus('Resetting state...', 0xffd166);
+      trpc.debug_fullReset.mutate()
+        .then((res) => {
+          this.clearStatus();
+          this.userRole = null;
+          this.remainingAp = res.remainingAp;
+          this.totalAp = res.totalAp;
+          this.isMapLoaded = false;
+          // Clear any current onboarding panel if visible
+          if (this.onboardingContainer) {
+            this.onboardingContainer.destroy();
+            this.onboardingContainer = null;
+          }
+          this.preFlightCheck();
+        })
+        .catch((err) => {
+          console.error('[Debug] Failed to execute full reset:', err);
+          this.showStatus('Reset failed', ERROR_COLOR);
+          this.time.delayedCall(1500, () => this.clearStatus());
+        });
+    });
+    this.debugPanel.add(resetBtn);
+  }
+
+  private pathOverlayGraphics: GameObjects.Graphics | null = null;
+  private swarmTextObjects: GameObjects.Text[] = [];
+  private swarmAnimTimer: Phaser.Time.TimerEvent | null = null;
+
+  private clearSwarmAnimation(): void {
+    if (this.pathOverlayGraphics) {
+      this.pathOverlayGraphics.destroy();
+      this.pathOverlayGraphics = null;
+    }
+    this.swarmTextObjects.forEach((t) => t.destroy());
+    this.swarmTextObjects = [];
+    if (this.swarmAnimTimer) {
+      this.swarmAnimTimer.destroy();
+      this.swarmAnimTimer = null;
+    }
+
+    // Clear pool sprites
+    this.swarmSprites.forEach(s => {
+      s.container.destroy();
+    });
+    this.swarmSprites = [];
+
+    // Clear towers, traps, vault chest
+    this.towerSprites.forEach(t => t.destroy());
+    this.towerSprites = [];
+    this.trapIndicators.forEach(t => t.destroy());
+    this.trapIndicators = [];
+    
+    if (this.vaultChest) {
+      this.vaultChest.destroy();
+      this.vaultChest = null;
+    }
+    if (this.auraEmitter) {
+      this.auraEmitter.destroy();
+      this.auraEmitter = null;
+    }
+    if (this.rewardModalContainer) {
+      this.rewardModalContainer.destroy();
+      this.rewardModalContainer = null;
+    }
+  }
+
+
+
+  private triggerTrapVFX(px: number, py: number): void {
+    const emitter = this.add.particles(px, py, 'particle_dot', {
+      speed: { min: -120, max: 120 },
+      angle: { min: 0, max: 360 },
+      scale: { start: 1.5, end: 0 },
+      blendMode: 'ADD',
+      lifespan: 500,
+      maxParticles: 20,
+    });
+    this.time.delayedCall(600, () => {
+      emitter.destroy();
+    });
+  }
+
+  private fireTowerProjectile(fromX: number, fromY: number, toX: number, toY: number): void {
+    const proj = this.add.circle(fromX, fromY, 3, 0xffd166).setDepth(17);
+    this.tweens.add({
+      targets: proj,
+      x: toX,
+      y: toY,
+      duration: 200,
+      ease: 'Linear',
+      onComplete: () => {
+        proj.destroy();
+      }
+    });
+  }
+
+  private playCinematicReplay(replayData: {
+    victory: 'Attacker' | 'Defender';
+    frames: Array<{
+      tick: number;
+      swarms: Array<{ x: number; y: number; count: number }>;
+    }>;
+  }): void {
+    this.clearSwarmAnimation();
+
+    const graphics = this.add.graphics().setDepth(15);
+    this.pathOverlayGraphics = graphics;
+
+    // Spawn towers and traps dynamically on the board
+    const trapCoords: Array<{ x: number; y: number }> = [];
+    let towerCount = 0;
+
+    for (let r = 0; r < GRID_SIZE; r++) {
+      for (let c = 0; c < GRID_SIZE; c++) {
+        if (this.grid[r]?.[c] === TILE_WALL && towerCount < 4 && r > 2 && c > 2) {
+          let hasAdjPath = false;
+          const neighbors = [
+            { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 }
+          ];
+          for (const n of neighbors) {
+            if (n.r >= 0 && n.r < GRID_SIZE && n.c >= 0 && n.c < GRID_SIZE) {
+              if (this.grid[n.r]?.[n.c] === TILE_PATH) {
+                hasAdjPath = true;
+                break;
+              }
+            }
+          }
+          if (hasAdjPath) {
+            const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
+            const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
+            const towerContainer = this.add.container(px, py).setDepth(14);
+            const towerBg = this.add.rectangle(0, 0, 24, 32, 0x8d99ae).setStrokeStyle(1.5, 0xd90429);
+            towerContainer.add(towerBg);
+            this.towerSprites.push(towerContainer);
+            towerCount++;
+          }
+        } else if (this.grid[r]?.[c] === TILE_PATH && trapCoords.length < 4 && r > 1 && c > 1 && (r !== 15 || c !== 15)) {
+          if ((r + c) % 5 === 0) {
+            const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
+            const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
+            const trapContainer = this.add.container(px, py).setDepth(11);
+            const trapBg = this.add.rectangle(0, 0, 24, 24, 0xef233c, 0.4).setStrokeStyle(2, 0xef233c);
+            trapBg.setScale(0.8);
+            trapBg.setAlpha(0.65);
+            trapContainer.add(trapBg);
+            this.trapIndicators.push(trapContainer);
+            trapCoords.push({ x: c, y: r });
+          }
+        }
+      }
+    }
+
+    // Spawn Vault at (15, 15)
+    const vpx = this.originX + 15 * TILE_SIZE + TILE_SIZE / 2;
+    const vpy = this.originY + 15 * TILE_SIZE + TILE_SIZE / 2;
+    this.vaultChest = this.add.container(vpx, vpy).setDepth(15);
+    const chestBg = this.add.rectangle(0, 0, 28, 28, 0xffd166).setStrokeStyle(2, 0x111622);
+    this.vaultChest.add(chestBg);
+
+    // Magical blue aura flows from Vault
+    this.auraEmitter = this.add.particles(vpx, vpy, 'particle_blue', {
+      speedY: { min: -50, max: -20 },
+      speedX: { min: -20, max: 20 },
+      scale: { start: 1, end: 0 },
+      blendMode: 'ADD',
+      lifespan: 1000,
+      frequency: 150,
+    });
+
+    let frameIndex = 0;
+
+    const playFrame = () => {
+      const currentFrame = replayData.frames[frameIndex];
+      if (!currentFrame) {
+        if (this.swarmAnimTimer) {
+          this.swarmAnimTimer.destroy();
+          this.swarmAnimTimer = null;
+        }
+        // Replay terminated: show reward scoreboard
+        this.time.delayedCall(1200, () => {
+          this.showRewardModal(replayData.victory);
+        });
+        return;
+      }
+
+      const nextActiveSprites: typeof this.swarmSprites = [];
+
+      currentFrame.swarms.forEach((swarm) => {
+        // Find closest active sprite from last frame
+        let bestSprite: typeof this.swarmSprites[0] | null = null;
+        let minDist = Infinity;
+
+        for (const s of this.swarmSprites) {
+          if (s.active && !nextActiveSprites.includes(s)) {
+            const dist = Math.abs(s.x - swarm.x) + Math.abs(s.y - swarm.y);
+            if (dist < minDist) {
+              minDist = dist;
+              bestSprite = s;
+            }
+          }
+        }
+
+        let targetSprite: typeof this.swarmSprites[0];
+
+        if (bestSprite && minDist <= 1.5) {
+          targetSprite = bestSprite;
+          targetSprite.x = swarm.x;
+          targetSprite.y = swarm.y;
+        } else {
+          // Split or initial spawn
+          let startX = swarm.x;
+          let startY = swarm.y;
+          if (bestSprite) {
+            startX = bestSprite.x;
+            startY = bestSprite.y;
+          }
+
+          const inactive = this.swarmSprites.find(s => !s.active && !nextActiveSprites.includes(s));
+          if (inactive) {
+            targetSprite = inactive;
+            targetSprite.active = true;
+            targetSprite.container.setVisible(true);
+            targetSprite.container.setAlpha(1);
+            targetSprite.container.setScale(1);
+            const px = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
+            const py = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
+            targetSprite.container.setPosition(px, py);
+            targetSprite.x = swarm.x;
+            targetSprite.y = swarm.y;
+          } else {
+            const px = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
+            const py = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
+            const container = this.add.container(px, py).setDepth(16);
+            container.setScale(0); // Pop in
+
+            const visual = this.add.circle(0, 0, 10, 0x00f0ff).setStrokeStyle(1.5, 0xffffff);
+            container.add(visual);
+
+            const txt = this.add.text(0, -18, String(swarm.count), {
+              fontFamily: 'Arial Black, Arial, sans-serif',
+              fontSize: '11px',
+              color: '#ffffff',
+              stroke: '#000000',
+              strokeThickness: 3.5,
+            }).setOrigin(0.5);
+            container.add(txt);
+
+            targetSprite = {
+              container,
+              circle: visual,
+              text: txt,
+              x: swarm.x,
+              y: swarm.y,
+              count: swarm.count,
+              active: true
+            };
+            this.swarmSprites.push(targetSprite);
+
+            this.tweens.add({
+              targets: container,
+              scaleX: 1,
+              scaleY: 1,
+              duration: 300,
+              ease: 'Back.easeOut'
+            });
+          }
+        }
+
+        nextActiveSprites.push(targetSprite);
+
+        const targetPx = this.originX + swarm.x * TILE_SIZE + TILE_SIZE / 2;
+        const targetPy = this.originY + swarm.y * TILE_SIZE + TILE_SIZE / 2;
+
+        // Detect trap triggers or count drop
+        const isTrapTile = trapCoords.some(tc => tc.x === swarm.x && tc.y === swarm.y);
+        const countDropped = targetSprite.count > swarm.count;
+
+        if (isTrapTile || countDropped) {
+          this.triggerTrapVFX(targetPx, targetPy);
+          // Find closest tower to fire projectile
+          let closestTower: GameObjects.Container | null = null;
+          let minTowerDist = Infinity;
+          this.towerSprites.forEach(t => {
+            const dist = Phaser.Math.Distance.Between(t.x, t.y, targetPx, targetPy);
+            if (dist < minTowerDist) {
+              minTowerDist = dist;
+              closestTower = t;
+            }
+          });
+          if (closestTower) {
+            this.fireTowerProjectile((closestTower as GameObjects.Container).x, (closestTower as GameObjects.Container).y, targetPx, targetPy);
+          }
+        }
+
+        // Vault breach check
+        if (swarm.x === 15 && swarm.y === 15 && replayData.victory === 'Attacker') {
+          this.cameras.main.shake(500, 0.02);
+          if (this.vaultChest) {
+            this.tweens.add({
+              targets: this.vaultChest,
+              scaleX: 1.6,
+              scaleY: 1.6,
+              duration: 600,
+              ease: 'Back.easeOut'
+            });
+          }
+        }
+
+        const prevCount = targetSprite.count;
+        targetSprite.text.setText(String(swarm.count));
+        targetSprite.count = swarm.count;
+
+        if (prevCount !== swarm.count) {
+          this.tweens.add({
+            targets: targetSprite.container,
+            scaleX: 1.25,
+            scaleY: 1.25,
+            duration: 150,
+            yoyo: true,
+            ease: 'Back.easeOut'
+          });
+        }
+
+        this.tweens.add({
+          targets: targetSprite.container,
+          x: targetPx,
+          y: targetPy,
+          duration: 650,
+          ease: 'Sine.easeInOut',
+        });
+      });
+
+      // Clear inactive sprites
+      this.swarmSprites.forEach(s => {
+        if (s.active && !nextActiveSprites.includes(s)) {
+          s.active = false;
+          this.tweens.add({
+            targets: s.container,
+            alpha: 0,
+            duration: 250,
+            onComplete: () => {
+              s.container.setVisible(false);
+            }
+          });
+        }
+      });
+
+      frameIndex++;
+    };
+
+    playFrame();
+    this.swarmAnimTimer = this.time.addEvent({
+      delay: 800,
+      callback: playFrame,
+      loop: true
+    });
+  }
+
+  private showMatchmakingOverlay(onMatchFound: () => void): { proceedToMatchFound: () => void; cancel: () => void } {
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    const overlay = this.add.container(0, 0).setDepth(100);
+
+    const bg = this.add.rectangle(width / 2, height / 2, width, height, 0x070b19, 0.95);
+    overlay.add(bg);
+
+    const panelW = 400;
+    const panelH = 250;
+    const panelBg = this.add.rectangle(width / 2, height / 2, panelW, panelH, 0x0e172a)
+      .setStrokeStyle(3, 0x00f0ff);
+    overlay.add(panelBg);
+
+    const scannerGraphics = this.add.graphics();
+    scannerGraphics.lineStyle(2, 0x00f0ff, 0.3);
+    scannerGraphics.strokeCircle(width / 2, height / 2 - 20, 60);
+    scannerGraphics.strokeCircle(width / 2, height / 2 - 20, 40);
+    overlay.add(scannerGraphics);
+
+    const sweepLine = this.add.graphics();
+    overlay.add(sweepLine);
+
+    const sweepTween = this.tweens.addCounter({
+      from: 0,
+      to: 360,
+      duration: 2000,
+      loop: -1,
+      onUpdate: (tween) => {
+        sweepLine.clear();
+        const angle = Phaser.Math.DegToRad(tween.getValue() ?? 0);
+        sweepLine.lineStyle(3, 0x00f0ff, 0.8);
+        sweepLine.lineBetween(
+          width / 2, 
+          height / 2 - 20, 
+          width / 2 + Math.cos(angle) * 60, 
+          height / 2 - 20 + Math.sin(angle) * 60
+        );
+      }
+    });
+
+    const searchText = this.add.text(width / 2, height / 2 + 65, '📡 CONNECTING TO SWARM PROTOCOL...', {
+      fontFamily: 'Courier New, monospace',
+      fontSize: '14px',
+      color: '#00f0ff',
+      stroke: '#000000',
+      strokeThickness: 3
+    }).setOrigin(0.5);
+    overlay.add(searchText);
+
+    this.tweens.add({
+      targets: searchText,
+      alpha: 0.3,
+      duration: 800,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    const statusText = this.add.text(width / 2, height / 2 + 90, 'RETRIEVING DEFENSIVE GRID...', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '11px',
+      color: '#94a3b8'
+    }).setOrigin(0.5);
+    overlay.add(statusText);
+
+    const statusMessages = [
+      'RETRIEVING DEFENSIVE GRID...',
+      'ESTABLISHING ENCRYPTED CORRIDOR...',
+      'CALCULATING OPTIMAL INVASION VECTORS...',
+      'SWARM READY. ENEMY THREADS IN SIGHT.'
+    ];
+    let msgIdx = 0;
+    const msgTimer = this.time.addEvent({
+      delay: 450,
+      callback: () => {
+        msgIdx = (msgIdx + 1) % statusMessages.length;
+        if (statusText.active) {
+          statusText.setText(statusMessages[msgIdx] || '');
+        }
+      },
+      loop: true
+    });
+
+    const proceedToMatchFound = () => {
+      sweepTween.stop();
+      sweepLine.destroy();
+      scannerGraphics.destroy();
+      msgTimer.destroy();
+      statusText.destroy();
+
+      searchText.setText('🔥 MATCH SECURED 🔥');
+      searchText.setStyle({
+        fontFamily: 'Impact, Arial Black, sans-serif',
+        fontSize: '28px',
+        color: '#ff3366',
+        stroke: '#000000',
+        strokeThickness: 5
+      });
+      searchText.setPosition(width / 2, height / 2 - 40);
+
+      this.tweens.add({
+        targets: searchText,
+        scaleX: 1.2,
+        scaleY: 1.2,
+        duration: 300,
+        yoyo: true,
+        repeat: 1,
+        ease: 'Back.easeOut'
+      });
+
+      const versusText = this.add.text(width / 2, height / 2 + 10, 'SWARM vs DEFENSIVE GRID', {
+        fontFamily: 'Arial Black, Arial, sans-serif',
+        fontSize: '14px',
+        color: '#ffd166',
+        stroke: '#000000',
+        strokeThickness: 3
+      }).setOrigin(0.5).setScale(0);
+      overlay.add(versusText);
+
+      this.tweens.add({
+        targets: versusText,
+        scaleX: 1,
+        scaleY: 1,
+        duration: 400,
+        ease: 'Back.easeOut',
+        delay: 200
+      });
+
+      const countdownText = this.add.text(width / 2, height / 2 + 65, 'SIMULATING IN 3...', {
+        fontFamily: 'Impact, Arial Black, sans-serif',
+        fontSize: '24px',
+        color: '#00ffcc',
+        stroke: '#000000',
+        strokeThickness: 4
+      }).setOrigin(0.5).setScale(0);
+      overlay.add(countdownText);
+
+      this.tweens.add({
+        targets: countdownText,
+        scaleX: 1,
+        scaleY: 1,
+        duration: 300,
+        ease: 'Back.easeOut',
+        delay: 500
+      });
+
+      let secondsLeft = 3;
+      const countTimer = this.time.addEvent({
+        delay: 800,
+        callback: () => {
+          secondsLeft--;
+          if (secondsLeft > 0) {
+            countdownText.setText(`SIMULATING IN ${secondsLeft}...`);
+            countdownText.setScale(0);
+            this.tweens.add({
+              targets: countdownText,
+              scaleX: 1,
+              scaleY: 1,
+              duration: 300,
+              ease: 'Back.easeOut'
+            });
+          } else if (secondsLeft === 0) {
+            countdownText.setText('INVASION!');
+            countdownText.setStyle({ color: '#ff003c' });
+            countdownText.setScale(0);
+            this.tweens.add({
+              targets: countdownText,
+              scaleX: 1.5,
+              scaleY: 1.5,
+              duration: 400,
+              ease: 'Back.easeOut'
+            });
+            this.cameras.main.flash(400, 255, 0, 60, true);
+          } else {
+            countTimer.destroy();
+            this.tweens.add({
+              targets: overlay,
+              alpha: 0,
+              duration: 400,
+              onComplete: () => {
+                overlay.destroy();
+                onMatchFound();
+              }
+            });
+          }
+        },
+        repeat: 4
+      });
+    };
+
+    return {
+      proceedToMatchFound,
+      cancel: () => {
+        sweepTween.stop();
+        sweepLine.destroy();
+        scannerGraphics.destroy();
+        msgTimer.destroy();
+        overlay.destroy();
+      }
+    };
+  }
+
+  private showRewardModal(victory: 'Attacker' | 'Defender'): void {
+    if (this.rewardModalContainer) {
+      this.rewardModalContainer.destroy();
+    }
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    this.rewardModalContainer = this.add.container(0, 0).setDepth(40);
+
+    const backdrop = this.add.rectangle(width / 2, height / 2, width, height, 0x07090e, 0.85)
+      .setInteractive();
+    this.rewardModalContainer.add(backdrop);
+
+    const panel = this.add.rectangle(width / 2, height / 2, 420, 320, 0x161a22)
+      .setStrokeStyle(2, 0xffd166);
+    this.rewardModalContainer.add(panel);
+
+    const titleText = victory === 'Attacker' ? '🏆 ATTACKER VICTORY' : '🛡️ DEFENDER DEFENSE SECURED';
+    const titleColor = victory === 'Attacker' ? '#ffd166' : '#00f0ff';
+
+    const title = this.add.text(width / 2, height / 2 - 110, titleText, {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '22px',
+      color: titleColor,
+      stroke: '#000000',
+      strokeThickness: 5,
+    }).setOrigin(0.5);
+    this.rewardModalContainer.add(title);
+
+    const banner = this.add.text(width / 2, height / 2 - 70, 'Faction Match Outcome Rewards', {
+      fontFamily: 'Arial, sans-serif',
+      fontSize: '13px',
+      color: '#a0aab2',
+    }).setOrigin(0.5);
+    this.rewardModalContainer.add(banner);
+
+    const targetGold = victory === 'Attacker' ? 150 : 75;
+    const targetShards = victory === 'Attacker' ? 12 : 5;
+
+    const goldLabel = this.add.text(width / 2, height / 2 - 20, '+0 Gold', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '18px',
+      color: '#ffb703',
+    }).setOrigin(0.5);
+    this.rewardModalContainer.add(goldLabel);
+
+    const shardsLabel = this.add.text(width / 2, height / 2 + 20, '+0 Skill Shards', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '18px',
+      color: '#02c39a',
+    }).setOrigin(0.5);
+    this.rewardModalContainer.add(shardsLabel);
+
+    const levelText = this.add.text(width / 2, height / 2 + 60, 'Level Up! Progress Secured', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '14px',
+      color: '#ffd166',
+    }).setOrigin(0.5).setAlpha(0);
+    this.rewardModalContainer.add(levelText);
+
+    const ledger = { gold: 0, shards: 0 };
+    this.tweens.add({
+      targets: ledger,
+      gold: targetGold,
+      shards: targetShards,
+      duration: 1500,
+      ease: 'Quad.easeOut',
+      onUpdate: () => {
+        goldLabel.setText(`+${Math.floor(ledger.gold)} Gold`);
+        shardsLabel.setText(`+${Math.floor(ledger.shards)} Skill Shards`);
+      },
+      onComplete: () => {
+        this.tweens.add({
+          targets: levelText,
+          alpha: 1,
+          scale: 1.1,
+          yoyo: true,
+          duration: 300,
+        });
+      }
+    });
+
+    const closeBtn = this.add.rectangle(width / 2, height / 2 + 115, 240, 40, 0xff4500)
+      .setInteractive({ useHandCursor: true });
+    const closeTxt = this.add.text(width / 2, height / 2 + 115, 'Close & Return to Blueprint', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '13px',
+      color: '#ffffff',
+    }).setOrigin(0.5);
+
+    closeBtn.on('pointerover', () => closeBtn.setFillStyle(0xff6a00));
+    closeBtn.on('pointerout', () => closeBtn.setFillStyle(0xff4500));
+    closeBtn.on('pointerdown', () => {
+      this.rewardModalContainer?.destroy();
+      this.rewardModalContainer = null;
+      this.clearSwarmAnimation();
+      this.buildGrid();
+    });
+
+    this.rewardModalContainer.add(closeBtn);
+    this.rewardModalContainer.add(closeTxt);
   }
 
   shutdown(): void {
+    this.clearSwarmAnimation();
     if (this.game?.canvas && this.canvasClickListener) {
       this.game.canvas.removeEventListener('click', this.canvasClickListener);
     }
   }
 }
+
