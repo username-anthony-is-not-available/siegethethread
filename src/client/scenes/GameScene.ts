@@ -72,6 +72,33 @@ export class GameScene extends Scene {
   private rewardModalContainer: GameObjects.Container | null = null;
   private auraEmitter: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
 
+  // Playback Timeline
+  private replayPlaying = false;
+  private replayData: {
+    victory: 'Attacker' | 'Defender';
+    frames: Array<{
+      tick: number;
+      swarms: Array<{ x: number; y: number; count: number }>;
+    }>;
+  } | null = null;
+  private replayFrameIndex = 0;
+  private replayAccumulator = 0;
+  private REPLAY_TICK_DURATION = 800; // ms
+  private activeSwarmNodes: Array<{
+    sprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.Text; x: number; y: number; count: number; active: boolean; };
+    startX: number;
+    startY: number;
+    targetX: number;
+    targetY: number;
+    startScale: number;
+    targetScale: number;
+    startAlpha: number;
+    targetAlpha: number;
+    isFadingOut: boolean;
+  }> = [];
+  private trapCoords: Array<{ x: number; y: number }> = [];
+
+
   constructor() {
     super('GameScene');
   }
@@ -958,7 +985,6 @@ export class GameScene extends Scene {
 
   private pathOverlayGraphics: GameObjects.Graphics | null = null;
   private swarmTextObjects: GameObjects.Text[] = [];
-  private swarmAnimTimer: Phaser.Time.TimerEvent | null = null;
 
   private clearSwarmAnimation(): void {
     if (this.pathOverlayGraphics) {
@@ -967,10 +993,7 @@ export class GameScene extends Scene {
     }
     this.swarmTextObjects.forEach((t) => t.destroy());
     this.swarmTextObjects = [];
-    if (this.swarmAnimTimer) {
-      this.swarmAnimTimer.destroy();
-      this.swarmAnimTimer = null;
-    }
+
 
     // Clear pool sprites
     this.swarmSprites.forEach(s => {
@@ -1041,7 +1064,7 @@ export class GameScene extends Scene {
     this.pathOverlayGraphics = graphics;
 
     // Spawn towers and traps dynamically on the board
-    const trapCoords: Array<{ x: number; y: number }> = [];
+    this.trapCoords = [];
     let towerCount = 0;
 
     for (let r = 0; r < GRID_SIZE; r++) {
@@ -1068,7 +1091,7 @@ export class GameScene extends Scene {
             this.towerSprites.push(towerContainer);
             towerCount++;
           }
-        } else if (this.grid[r]?.[c] === TILE_PATH && trapCoords.length < 4 && r > 1 && c > 1 && (r !== 15 || c !== 15)) {
+        } else if (this.grid[r]?.[c] === TILE_PATH && this.trapCoords.length < 4 && r > 1 && c > 1 && (r !== 15 || c !== 15)) {
           if ((r + c) % 5 === 0) {
             const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
             const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
@@ -1078,7 +1101,7 @@ export class GameScene extends Scene {
             trapBg.setAlpha(0.65);
             trapContainer.add(trapBg);
             this.trapIndicators.push(trapContainer);
-            trapCoords.push({ x: c, y: r });
+            this.trapCoords.push({ x: c, y: r });
           }
         }
       }
@@ -1101,193 +1124,204 @@ export class GameScene extends Scene {
       frequency: 150,
     });
 
-    let frameIndex = 0;
+    // Initialize timeline playback
+    this.replayData = replayData;
+    this.replayFrameIndex = 0;
+    this.replayAccumulator = 0;
+    this.replayPlaying = true;
 
-    const playFrame = () => {
-      const currentFrame = replayData.frames[frameIndex];
-      if (!currentFrame) {
-        if (this.swarmAnimTimer) {
-          this.swarmAnimTimer.destroy();
-          this.swarmAnimTimer = null;
+    // Process first frame immediately
+    this.advanceReplayFrame();
+  }
+
+
+  private advanceReplayFrame(): void {
+    if (!this.replayData || !this.replayPlaying) return;
+
+    const currentFrame = this.replayData.frames[this.replayFrameIndex];
+    if (!currentFrame) {
+      // End of replay
+      this.replayPlaying = false;
+      this.time.delayedCall(1200, () => {
+        if (this.replayData) {
+          this.showRewardModal(this.replayData.victory);
         }
-        // Replay terminated: show reward scoreboard
-        this.time.delayedCall(1200, () => {
-          this.showRewardModal(replayData.victory);
-        });
-        return;
+      });
+      return;
+    }
+
+    const nextActiveSprites: typeof this.swarmSprites = [];
+    const newActiveNodes: typeof this.activeSwarmNodes = [];
+
+    currentFrame.swarms.forEach((swarm) => {
+      // Find closest active sprite from last frame
+      let bestSprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.Text; x: number; y: number; count: number; active: boolean; } | null = null;
+      let minDist = Infinity;
+
+      for (const s of this.swarmSprites) {
+        if (s.active && !nextActiveSprites.includes(s)) {
+          const dist = Math.abs(s.x - swarm.x) + Math.abs(s.y - swarm.y);
+          if (dist < minDist) {
+            minDist = dist;
+            bestSprite = s;
+          }
+        }
       }
 
-      const nextActiveSprites: typeof this.swarmSprites = [];
+      let targetSprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.Text; x: number; y: number; count: number; active: boolean; };
+      let startX = swarm.x;
+      let startY = swarm.y;
+      let targetScale = 1;
+      let startScale = 1;
+      let targetAlpha = 1;
+      let startAlpha = 1;
 
-      currentFrame.swarms.forEach((swarm) => {
-        // Find closest active sprite from last frame
-        let bestSprite: typeof this.swarmSprites[0] | null = null;
-        let minDist = Infinity;
-
-        for (const s of this.swarmSprites) {
-          if (s.active && !nextActiveSprites.includes(s)) {
-            const dist = Math.abs(s.x - swarm.x) + Math.abs(s.y - swarm.y);
-            if (dist < minDist) {
-              minDist = dist;
-              bestSprite = s;
-            }
-          }
+      if (bestSprite && minDist <= 1.5) {
+        targetSprite = bestSprite;
+        startX = targetSprite.x;
+        startY = targetSprite.y;
+        startScale = targetSprite.container.scale;
+        targetSprite.x = swarm.x;
+        targetSprite.y = swarm.y;
+      } else {
+        // Split or initial spawn
+        if (bestSprite) {
+          startX = bestSprite.x;
+          startY = bestSprite.y;
         }
 
-        let targetSprite: typeof this.swarmSprites[0];
-
-        if (bestSprite && minDist <= 1.5) {
-          targetSprite = bestSprite;
+        const inactive = this.swarmSprites.find(s => !s.active && !nextActiveSprites.includes(s));
+        if (inactive) {
+          targetSprite = inactive;
+          targetSprite.active = true;
+          targetSprite.container.setVisible(true);
+          const px = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
+          const py = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
+          targetSprite.container.setPosition(px, py);
           targetSprite.x = swarm.x;
           targetSprite.y = swarm.y;
+          startScale = 1;
+          startAlpha = 1;
         } else {
-          // Split or initial spawn
-          let startX = swarm.x;
-          let startY = swarm.y;
-          if (bestSprite) {
-            startX = bestSprite.x;
-            startY = bestSprite.y;
-          }
+          const px = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
+          const py = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
+          const container = this.add.container(px, py).setDepth(16);
+          container.setScale(0); // Pop in
 
-          const inactive = this.swarmSprites.find(s => !s.active && !nextActiveSprites.includes(s));
-          if (inactive) {
-            targetSprite = inactive;
-            targetSprite.active = true;
-            targetSprite.container.setVisible(true);
-            targetSprite.container.setAlpha(1);
-            targetSprite.container.setScale(1);
-            const px = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
-            const py = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
-            targetSprite.container.setPosition(px, py);
-            targetSprite.x = swarm.x;
-            targetSprite.y = swarm.y;
-          } else {
-            const px = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
-            const py = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
-            const container = this.add.container(px, py).setDepth(16);
-            container.setScale(0); // Pop in
+          const visual = this.add.circle(0, 0, 10, 0x00f0ff).setStrokeStyle(1.5, 0xffffff);
+          container.add(visual);
 
-            const visual = this.add.circle(0, 0, 10, 0x00f0ff).setStrokeStyle(1.5, 0xffffff);
-            container.add(visual);
+          const txt = this.add.text(0, -18, String(swarm.count), {
+            fontFamily: 'Arial Black, Arial, sans-serif',
+            fontSize: '11px',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 3.5,
+          }).setOrigin(0.5);
+          container.add(txt);
 
-            const txt = this.add.text(0, -18, String(swarm.count), {
-              fontFamily: 'Arial Black, Arial, sans-serif',
-              fontSize: '11px',
-              color: '#ffffff',
-              stroke: '#000000',
-              strokeThickness: 3.5,
-            }).setOrigin(0.5);
-            container.add(txt);
+          targetSprite = {
+            container,
+            circle: visual,
+            text: txt,
+            x: swarm.x,
+            y: swarm.y,
+            count: swarm.count,
+            active: true
+          };
+          this.swarmSprites.push(targetSprite);
 
-            targetSprite = {
-              container,
-              circle: visual,
-              text: txt,
-              x: swarm.x,
-              y: swarm.y,
-              count: swarm.count,
-              active: true
-            };
-            this.swarmSprites.push(targetSprite);
-
-            this.tweens.add({
-              targets: container,
-              scaleX: 1,
-              scaleY: 1,
-              duration: 300,
-              ease: 'Back.easeOut'
-            });
-          }
+          startScale = 0;
+          startAlpha = 1;
         }
+      }
 
-        nextActiveSprites.push(targetSprite);
+      nextActiveSprites.push(targetSprite);
 
-        const targetPx = this.originX + swarm.x * TILE_SIZE + TILE_SIZE / 2;
-        const targetPy = this.originY + swarm.y * TILE_SIZE + TILE_SIZE / 2;
+      const targetPx = this.originX + swarm.x * TILE_SIZE + TILE_SIZE / 2;
+      const targetPy = this.originY + swarm.y * TILE_SIZE + TILE_SIZE / 2;
+      const startPx = this.originX + startX * TILE_SIZE + TILE_SIZE / 2;
+      const startPy = this.originY + startY * TILE_SIZE + TILE_SIZE / 2;
 
-        // Detect trap triggers or count drop
-        const isTrapTile = trapCoords.some(tc => tc.x === swarm.x && tc.y === swarm.y);
-        const countDropped = targetSprite.count > swarm.count;
+      // Detect trap triggers or count drop
+      const isTrapTile = this.trapCoords.some(tc => tc.x === swarm.x && tc.y === swarm.y);
+      const countDropped = targetSprite.count > swarm.count;
 
-        if (isTrapTile || countDropped) {
-          this.triggerTrapVFX(targetPx, targetPy);
-          // Find closest tower to fire projectile
-          let closestTower: GameObjects.Container | null = null;
-          let minTowerDist = Infinity;
-          this.towerSprites.forEach(t => {
-            const dist = Phaser.Math.Distance.Between(t.x, t.y, targetPx, targetPy);
-            if (dist < minTowerDist) {
-              minTowerDist = dist;
-              closestTower = t;
-            }
-          });
-          if (closestTower) {
-            this.fireTowerProjectile((closestTower as GameObjects.Container).x, (closestTower as GameObjects.Container).y, targetPx, targetPy);
+      if (isTrapTile || countDropped) {
+        this.triggerTrapVFX(targetPx, targetPy);
+        // Find closest tower to fire projectile
+        let closestTower: GameObjects.Container | null = null;
+        let minTowerDist = Infinity;
+        this.towerSprites.forEach(t => {
+          const dist = Phaser.Math.Distance.Between(t.x, t.y, targetPx, targetPy);
+          if (dist < minTowerDist) {
+            minTowerDist = dist;
+            closestTower = t;
           }
+        });
+        if (closestTower) {
+          this.fireTowerProjectile((closestTower as GameObjects.Container).x, (closestTower as GameObjects.Container).y, targetPx, targetPy);
         }
+      }
 
-        // Vault breach check
-        if (swarm.x === 15 && swarm.y === 15 && replayData.victory === 'Attacker') {
-          this.cameras.main.shake(500, 0.02);
-          if (this.vaultChest) {
-            this.tweens.add({
-              targets: this.vaultChest,
-              scaleX: 1.6,
-              scaleY: 1.6,
-              duration: 600,
-              ease: 'Back.easeOut'
-            });
-          }
-        }
-
-        const prevCount = targetSprite.count;
-        targetSprite.text.setText(String(swarm.count));
-        targetSprite.count = swarm.count;
-
-        if (prevCount !== swarm.count) {
+      // Vault breach check
+      if (swarm.x === 15 && swarm.y === 15 && this.replayData?.victory === 'Attacker') {
+        this.cameras.main.shake(500, 0.02);
+        if (this.vaultChest) {
           this.tweens.add({
-            targets: targetSprite.container,
-            scaleX: 1.25,
-            scaleY: 1.25,
-            duration: 150,
-            yoyo: true,
+            targets: this.vaultChest,
+            scaleX: 1.6,
+            scaleY: 1.6,
+            duration: 600,
             ease: 'Back.easeOut'
           });
         }
+      }
 
-        this.tweens.add({
-          targets: targetSprite.container,
-          x: targetPx,
-          y: targetPy,
-          duration: 650,
-          ease: 'Sine.easeInOut',
-        });
+      const prevCount = targetSprite.count;
+      targetSprite.text.setText(String(swarm.count));
+      targetSprite.count = swarm.count;
+
+      if (prevCount !== swarm.count) {
+        // Pulsate
+        targetScale = 1.25;
+      }
+
+      newActiveNodes.push({
+        sprite: targetSprite,
+        startX: startPx,
+        startY: startPy,
+        targetX: targetPx,
+        targetY: targetPy,
+        startScale,
+        targetScale,
+        startAlpha,
+        targetAlpha,
+        isFadingOut: false
       });
-
-      // Clear inactive sprites
-      this.swarmSprites.forEach(s => {
-        if (s.active && !nextActiveSprites.includes(s)) {
-          s.active = false;
-          this.tweens.add({
-            targets: s.container,
-            alpha: 0,
-            duration: 250,
-            onComplete: () => {
-              s.container.setVisible(false);
-            }
-          });
-        }
-      });
-
-      frameIndex++;
-    };
-
-    playFrame();
-    this.swarmAnimTimer = this.time.addEvent({
-      delay: 800,
-      callback: playFrame,
-      loop: true
     });
+
+    // Handle inactive sprites (fade out)
+    this.swarmSprites.forEach(s => {
+      if (s.active && !nextActiveSprites.includes(s)) {
+        s.active = false;
+        newActiveNodes.push({
+          sprite: s,
+          startX: s.container.x,
+          startY: s.container.y,
+          targetX: s.container.x,
+          targetY: s.container.y,
+          startScale: s.container.scale,
+          targetScale: s.container.scale,
+          startAlpha: s.container.alpha,
+          targetAlpha: 0,
+          isFadingOut: true
+        });
+      }
+    });
+
+    this.activeSwarmNodes = newActiveNodes;
+    this.replayFrameIndex++;
   }
 
   private showMatchmakingOverlay(onMatchFound: () => void): { proceedToMatchFound: () => void; cancel: () => void } {
@@ -1595,6 +1629,50 @@ export class GameScene extends Scene {
 
     this.rewardModalContainer.add(closeBtn);
     this.rewardModalContainer.add(closeTxt);
+  }
+
+
+  override update(_time: number, delta: number): void {
+    if (this.replayPlaying && this.replayData) {
+      this.replayAccumulator += delta;
+
+      let progress = this.replayAccumulator / this.REPLAY_TICK_DURATION;
+
+      if (progress >= 1) {
+        this.advanceReplayFrame();
+        this.replayAccumulator -= this.REPLAY_TICK_DURATION;
+        progress = this.replayAccumulator / this.REPLAY_TICK_DURATION;
+      }
+
+      const clampedProgress = Phaser.Math.Clamp(progress, 0, 1);
+      const easeProgress = Phaser.Math.Easing.Sine.InOut(clampedProgress);
+
+      this.activeSwarmNodes.forEach(node => {
+        const tX = Phaser.Math.Linear(node.startX, node.targetX, easeProgress);
+        const tY = Phaser.Math.Linear(node.startY, node.targetY, easeProgress);
+        node.sprite.container.setPosition(tX, tY);
+
+        if (node.startScale !== node.targetScale) {
+           // Basic Yoyo imitation if target is > 1
+           if (node.targetScale > 1) {
+              const half = Phaser.Math.Easing.Back.Out(Math.min(clampedProgress * 2, 1));
+              const half2 = Math.max(0, (clampedProgress - 0.5) * 2);
+              const scale = node.startScale + ((node.targetScale - node.startScale) * half) - ((node.targetScale - 1) * half2);
+              node.sprite.container.setScale(scale);
+           } else {
+              const easeScale = Phaser.Math.Easing.Back.Out(clampedProgress);
+              node.sprite.container.setScale(Phaser.Math.Linear(node.startScale, node.targetScale, easeScale));
+           }
+        }
+
+        if (node.startAlpha !== node.targetAlpha) {
+           node.sprite.container.setAlpha(Phaser.Math.Linear(node.startAlpha, node.targetAlpha, clampedProgress));
+           if (node.isFadingOut && clampedProgress >= 0.95) {
+             node.sprite.container.setVisible(false);
+           }
+        }
+      });
+    }
   }
 
   shutdown(): void {
