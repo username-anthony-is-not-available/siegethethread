@@ -120,7 +120,7 @@ export type SwarmSimulationResult = {
 /**
  * Runs a junction-splitting swarm simulation on a 16x16 grid.
  */
-export function runSwarmSimulation(mapString: string, applyDamage = false): SwarmSimulationResult {
+export function runSwarmSimulation(mapString: string, applyDamage = false, initialCount = 100): SwarmSimulationResult {
   const GRID_SIZE = 16;
 
   const grid: number[][] = [];
@@ -193,7 +193,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false): Swar
     {
       x: 0,
       y: 0,
-      count: 100,
+      count: initialCount,
       visited: startVisited,
       status: 'moving',
     },
@@ -253,10 +253,17 @@ export function runSwarmSimulation(mapString: string, applyDamage = false): Swar
         });
       } else {
         const k = validMoves.length;
-        const splitCount = Math.floor(swarm.count / k);
+        const baseSplit = Math.floor(swarm.count / k);
+        let remainder = swarm.count % k;
 
-        if (splitCount >= 1) {
-          for (const move of validMoves) {
+        for (const move of validMoves) {
+          let allocatedCount = baseSplit;
+          if (remainder > 0) {
+            allocatedCount += 1;
+            remainder -= 1;
+          }
+
+          if (allocatedCount >= 1) {
             const isTarget = move.x === 15 && move.y === 15;
             const newVisited = new Set(swarm.visited);
             newVisited.add(`${move.x},${move.y}`);
@@ -276,7 +283,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false): Swar
               }
             }
 
-            const nextCount = Math.max(0, splitCount - damage);
+            const nextCount = Math.max(0, allocatedCount - damage);
             const status = nextCount <= 0 ? 'deadend' : (isTarget ? 'reached' : 'moving');
 
             nextSwarms.push({
