@@ -298,7 +298,22 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
       }
     }
 
-    currentSwarms = nextSwarms;
+    const mergedSwarmsMap = new Map<string, SwarmState>();
+    for (const swarm of nextSwarms) {
+      // Group by spatial coordinates (x, y) to prevent exponential array growth
+      const key = `${swarm.x},${swarm.y},${swarm.status}`;
+      if (mergedSwarmsMap.has(key)) {
+        const existing = mergedSwarmsMap.get(key)!;
+        existing.count += swarm.count;
+        // Merge the visited histories (signatures)
+        for (const v of swarm.visited) {
+          existing.visited.add(v);
+        }
+      } else {
+        mergedSwarmsMap.set(key, swarm);
+      }
+    }
+    currentSwarms = Array.from(mergedSwarmsMap.values());
     frames.push({
       tick,
       swarms: currentSwarms.map((s) => ({ x: s.x, y: s.y, count: s.count })),
