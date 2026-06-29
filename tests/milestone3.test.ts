@@ -131,7 +131,7 @@ async function mockMutateTile(
   }
 
   // Deduct AP & save map
-  store.strings[mapKey] = result.newMap;
+  store.strings[mapKey] = result.newMap!;
   store.strings[apKey] = String(ap - 1);
 
   return { x: input.x, y: input.y, state: input.state };
@@ -279,7 +279,7 @@ describe('Milestone 3 - Player Profiles, Roles, and Daily Energy Authorization B
       await mockInitializeProfile(store, userId, 'Rogue', 'Defender', dateStr);
 
       // Perform 3 mutations and verify AP decrements
-      await mockMutateTile(store, postId, userId, dateStr, { x: 0, y: 0, state: 1 });
+      await mockMutateTile(store, postId, userId, dateStr, { x: 0, y: 0, state: 2 });
       let energy = await mockGetRemainingEnergy(store, userId, dateStr);
       expect(energy.remainingAp).toBe(19);
 
@@ -300,7 +300,7 @@ describe('Milestone 3 - Player Profiles, Roles, and Daily Energy Authorization B
       store.strings[`player:ap:${userId}:${dateStr}`] = '1';
 
       // Spend last AP
-      await mockMutateTile(store, postId, userId, dateStr, { x: 0, y: 0, state: 1 });
+      await mockMutateTile(store, postId, userId, dateStr, { x: 0, y: 0, state: 2 });
       
       const energy = await mockGetRemainingEnergy(store, userId, dateStr);
       expect(energy.remainingAp).toBe(0);
@@ -363,7 +363,7 @@ describe('Milestone 3 - Player Profiles, Roles, and Daily Energy Authorization B
 
       // Set profile, AP, and map
       await mockInitializeProfile(store, userId, 'Barbarian', 'Defender', dateStr);
-      await mockMutateTile(store, postId, userId, dateStr, { x: 0, y: 0, state: 1 });
+      await mockMutateTile(store, postId, userId, dateStr, { x: 0, y: 0, state: 2 });
 
       const mapValBefore = store.strings[getMapKey(postId)];
       expect(mapValBefore).not.toBe(createDefaultMap());

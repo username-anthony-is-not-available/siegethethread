@@ -123,6 +123,7 @@ export type SwarmSimulationResult = {
 export function runSwarmSimulation(mapString: string, applyDamage = false, initialCount = 100): SwarmSimulationResult {
   const GRID_SIZE = 16;
 
+  // 1. Parse Grid Map Layout
   const grid: number[][] = [];
   for (let r = 0; r < GRID_SIZE; r++) {
     const row: number[] = [];
@@ -135,15 +136,7 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
   }
 
   if (grid[0]?.[0] !== 1) {
-    return {
-      victory: 'Defender',
-      frames: [
-        {
-          tick: 0,
-          swarms: [],
-        },
-      ],
-    };
+    return { victory: 'Defender', frames: [{ tick: 0, swarms: [] }] };
   }
 
   // Identify traps and towers from the multi-state map layout
@@ -161,36 +154,6 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     }
   }
 
-  type SwarmState = {
-    x: number;
-    y: number;
-    count: number;
-    visited: Set<string>;
-    status: 'moving' | 'reached' | 'deadend';
-    delayTicks?: number;
-  };
-
-  const startVisited = new Set<string>();
-  startVisited.add('0,0');
-
-  let currentSwarms: SwarmState[] = [
-    {
-      x: 0,
-      y: 0,
-      count: initialCount,
-      visited: startVisited,
-      status: 'moving',
-      delayTicks: 0,
-    },
-  ];
-
-  const frames: SwarmFrame[] = [
-    {
-      tick: 0,
-      swarms: currentSwarms.map((s) => ({ x: s.x, y: s.y, count: s.count })),
-    },
-  ];
-
   const directions = [
     { dx: 0, dy: -1 }, // North
     { dx: 0, dy: 1 },  // South
@@ -198,14 +161,48 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
     { dx: 1, dy: 0 },  // East
   ];
 
+  // 2. Pre-compute Source-Centric Distance Field from (0,0) via BFS
+  const distGrid: number[][] = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(-1));
+  const queue: Array<{ x: number; y: number; d: number }> = [{ x: 0, y: 0, d: 0 }];
+  if (distGrid[0] !== undefined) distGrid[0][0] = 0;
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    for (const { dx, dy } of directions) {
+      const nx = curr.x + dx;
+      const ny = curr.y + dy;
+      if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+        if (grid[ny]?.[nx] === 1 && distGrid[ny]?.[nx] === -1) {
+          if (distGrid[ny] !== undefined) distGrid[ny][nx] = curr.d + 1;
+          queue.push({ x: nx, y: ny, d: curr.d + 1 });
+        }
+      }
+    }
+  }
+
+  // 3. Initialize Swarm State (Completely Stateless; No Visited History Sets)
+  type SwarmState = {
+    x: number;
+    y: number;
+    count: number;
+    status: 'moving' | 'reached' | 'deadend';
+    delayTicks?: number;
+  };
+
+  let currentSwarms: SwarmState[] = [
+    { x: 0, y: 0, count: initialCount, status: 'moving', delayTicks: 0 }
+  ];
+
+  const frames: SwarmFrame[] = [
+    { tick: 0, swarms: currentSwarms.map((s) => ({ x: s.x, y: s.y, count: s.count })) }
+  ];
+
   let tick = 0;
   const maxTicks = 100;
 
   while (tick < maxTicks) {
     const activeMoving = currentSwarms.filter((s) => s.status === 'moving' && s.count > 0);
-    if (activeMoving.length === 0) {
-      break;
-    }
+    if (activeMoving.length === 0) break;
 
     tick++;
     const nextSwarms: SwarmState[] = [];
@@ -220,26 +217,22 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
         continue;
       }
 
+      // Check neighbors with a strictly GREATER distance value from the source
+      const currentDist = distGrid[swarm.y]?.[swarm.x] ?? -1;
       const validMoves: Array<{ x: number; y: number }> = [];
+
       for (const { dx, dy } of directions) {
         const nx = swarm.x + dx;
         const ny = swarm.y + dy;
-
         if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-          if (grid[ny]?.[nx] === 1) {
-            const key = `${nx},${ny}`;
-            if (!swarm.visited.has(key)) {
-              validMoves.push({ x: nx, y: ny });
-            }
+          if (grid[ny]?.[nx] === 1 && distGrid[ny] !== undefined && distGrid[ny][nx]! > currentDist) {
+            validMoves.push({ x: nx, y: ny });
           }
         }
       }
 
       if (validMoves.length === 0) {
-        nextSwarms.push({
-          ...swarm,
-          status: 'deadend',
-        });
+        nextSwarms.push({ ...swarm, status: 'deadend' });
       } else {
         const k = validMoves.length;
         const baseSplit = Math.floor(swarm.count / k);
@@ -254,8 +247,6 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
 
           if (allocatedCount >= 1) {
             const isTarget = move.x === 15 && move.y === 15;
-            const newVisited = new Set(swarm.visited);
-            newVisited.add(`${move.x},${move.y}`);
 
             // Calculate damage from traps & towers
             let damage = 0;
@@ -281,30 +272,25 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
               x: move.x,
               y: move.y,
               count: nextCount,
-              visited: newVisited,
-              status: status,
-              delayTicks: newDelayTicks,
+              status,
+              delayTicks: newDelayTicks
             });
           }
         }
       }
     }
 
+    // Spatial coordinate grouping to prevent exponential array scaling
     const mergedSwarmsMap = new Map<string, SwarmState>();
     for (const swarm of nextSwarms) {
-      // Group by spatial coordinates (x, y) to prevent exponential array growth
       const key = `${swarm.x},${swarm.y},${swarm.status},${swarm.delayTicks || 0}`;
       if (mergedSwarmsMap.has(key)) {
-        const existing = mergedSwarmsMap.get(key)!;
-        existing.count += swarm.count;
-        // Merge the visited histories (signatures)
-        for (const v of swarm.visited) {
-          existing.visited.add(v);
-        }
+        mergedSwarmsMap.get(key)!.count += swarm.count;
       } else {
         mergedSwarmsMap.set(key, swarm);
       }
     }
+
     currentSwarms = Array.from(mergedSwarmsMap.values());
     frames.push({
       tick,
@@ -313,10 +299,5 @@ export function runSwarmSimulation(mapString: string, applyDamage = false, initi
   }
 
   const hasReached = currentSwarms.some((s) => s.status === 'reached' && s.count > 0);
-  const victory = hasReached ? 'Attacker' : 'Defender';
-
-  return {
-    victory,
-    frames,
-  };
+  return { victory: hasReached ? 'Attacker' : 'Defender', frames };
 }
