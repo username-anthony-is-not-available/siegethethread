@@ -188,6 +188,129 @@ export const appRouter = t.router({
    * Uses Redis WATCH/MULTI/EXEC transactions to prevent lost updates
    * from concurrent mutations. Retries on WATCH conflicts.
    */
+
+  mutateTilesBatch: t.procedure
+    .input(
+      z.object({
+        mutations: z.array(
+          z.object({
+            x: z.number().int().min(0).max(15),
+            y: z.number().int().min(0).max(15),
+            state: z.number().int().min(0).max(1),
+          })
+        ),
+      })
+    )
+    .mutation(
+      async ({
+        input,
+      }: {
+        input: { mutations: Array<{ x: number; y: number; state: number }> };
+      }): Promise<{ success: boolean; mapped: Array<{ x: number; y: number; state: number }> }> => {
+        const { postId, userId } = context;
+
+        if (!postId) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'postId is required but missing from context',
+          });
+        }
+
+        if (!userId) {
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: 'User is not logged in',
+          });
+        }
+
+        // Retrieve player profile
+        const profileKey = getProfileKey(userId);
+        const profile = await redis.hGetAll(profileKey);
+        if (!profile || Object.keys(profile).length === 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Player profile is not initialized',
+          });
+        }
+
+        // Verify player is Defender
+        if (profile.role !== 'Defender') {
+          throw new TRPCError({
+            code: 'UNAUTHORIZED',
+            message: 'Only Defenders can mutate the board grid',
+          });
+        }
+
+        if (input.mutations.length === 0) {
+          return { success: true, mapped: [] };
+        }
+
+        // Check Action Points energy availability
+        const apKey = getApKey(userId, postId);
+
+        // Ensure AP key exists since incrBy decrements it
+        let rawAp = await redis.get(apKey);
+        if (rawAp === undefined || rawAp === null) {
+          await redis.set(apKey, '20');
+          rawAp = '20';
+        }
+
+        const ap = parseInt(rawAp, 10);
+        if (ap < input.mutations.length) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'OUT_OF_ENERGY',
+          });
+        }
+
+        const key = getMapKey(postId);
+        let currentMap = await redis.get(key);
+
+        // Handle missing map - initialize
+        if (!currentMap || currentMap.length !== TOTAL_TILES) {
+          currentMap = createDefaultMap();
+          await redis.set(key, currentMap);
+        }
+
+        let updatedMap = currentMap;
+        for (const mut of input.mutations) {
+          const mutationPayload = {
+            type: 'TILE_MUTATION_REQUEST' as const,
+            x: mut.x,
+            y: mut.y,
+            state: mut.state,
+          };
+
+          const result = applyMutation(updatedMap, mutationPayload);
+
+          if (!result.success) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: result.error ?? 'Mutation rejected by server',
+            });
+          }
+          if (result.newMap) {
+            updatedMap = result.newMap;
+          }
+        }
+
+        // Atomically decrement AP. If we dropped below 0, revert and throw.
+        const newAp = await redis.incrBy(apKey, -input.mutations.length);
+        if (newAp < 0) {
+          await redis.incrBy(apKey, input.mutations.length);
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'OUT_OF_ENERGY',
+          });
+        }
+
+        await redis.set(key, updatedMap);
+
+        console.log(`[tRPC] mutateTilesBatch: committed ${input.mutations.length} mutations for post ${postId}`);
+        return { success: true, mapped: input.mutations };
+      }
+    ),
+
   mutateTile: t.procedure
     .input(
       z.object({

@@ -21,6 +21,15 @@ export type TileMutationRequest = {
   state: number;
 };
 
+export type TileBatchMutationRequest = {
+  type: 'TILE_BATCH_MUTATION_REQUEST';
+  mutations: Array<{
+    x: number;
+    y: number;
+    state: number;
+  }>;
+};
+
 // Profile types
 export type PlayerClass = 'Barbarian' | 'Sorcerer' | 'Rogue';
 export type PlayerRole = 'Attacker' | 'Defender';
@@ -102,7 +111,7 @@ export type TileMutationError = {
 // Union types
 // ---------------------------------------------------------------------------
 
-export type ClientToServerMessage = FetchMapRequest | TileMutationRequest;
+export type ClientToServerMessage = FetchMapRequest | TileMutationRequest | TileBatchMutationRequest;
 
 export type ServerToClientMessage =
   | FetchMapResponse

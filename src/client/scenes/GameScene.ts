@@ -35,6 +35,9 @@ export class GameScene extends Scene {
   private originX = 0;
   private originY = 0;
   private pendingMutations = new Set<string>();
+  private stagedMutations = new Map<string, {x: number; y: number; state: number}>();
+  private commitButtonBg: GameObjects.Rectangle | null = null;
+  private commitButtonText: GameObjects.Text | null = null;
   /** True once the server has responded with the initial map layout */
   private isMapLoaded = false;
   private exitRequested = false;
@@ -60,7 +63,7 @@ export class GameScene extends Scene {
   private swarmSprites: Array<{
     container: GameObjects.Container;
     circle: GameObjects.Arc | GameObjects.Sprite;
-    text: GameObjects.Text;
+    text: GameObjects.BitmapText;
     x: number;
     y: number;
     count: number;
@@ -71,6 +74,7 @@ export class GameScene extends Scene {
   private trapIndicators: GameObjects.Container[] = [];
   private rewardModalContainer: GameObjects.Container | null = null;
   private auraEmitter: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
+  private pooledVfxEmitter: Phaser.GameObjects.Particles.ParticleEmitter | null = null;
 
   // Playback Timeline
   private replayPlaying = false;
@@ -85,7 +89,7 @@ export class GameScene extends Scene {
   private replayAccumulator = 0;
   private REPLAY_TICK_DURATION = 800; // ms
   private activeSwarmNodes: Array<{
-    sprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.Text; x: number; y: number; count: number; active: boolean; };
+    sprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.BitmapText; x: number; y: number; count: number; active: boolean; };
     startX: number;
     startY: number;
     targetX: number;
@@ -111,6 +115,7 @@ export class GameScene extends Scene {
     this.statusLabel = null;
     this.energyLabel = null;
     this.pendingMutations.clear();
+    this.stagedMutations.clear();
     this.isMapLoaded = false;
     this.exitRequested = false;
     this.lastExitEvent = undefined;
@@ -130,11 +135,51 @@ export class GameScene extends Scene {
     this.trapIndicators = [];
     this.rewardModalContainer = null;
     this.auraEmitter = null;
+    this.pooledVfxEmitter = null;
   }
+
 
   preload(): void {
     // 1. Asset Loss Safeguards: Generate fallback textures if loading fails or for default use
     const graphics = this.make.graphics({ x: 0, y: 0 }, false);
+
+    // Generate RetroFont (BitmapFont) dynamically for swarm counts
+    graphics.fillStyle(0x000000, 1);
+    graphics.fillRect(0, 0, 100, 20); // Background to clear space, but we'll use a text object to generate texture
+    graphics.clear();
+
+    // We'll use a small hidden text object to generate the bitmap font texture
+
+    // Generate actual Bitmap Font manually
+    const canvas = document.createElement('canvas');
+    canvas.width = 120;
+    canvas.height = 14;
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = 'bold 10px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Character positions
+    const chars = '0123456789';
+    const charWidth = 10;
+    const config: any = {
+      image: 'swarm_font',
+      width: 10,
+      height: 14,
+      chars: chars,
+      charsPerRow: 10,
+      // Type bypass for incorrect typings
+      spacing: { x: 0, y: 0 } as any,
+      lineSpacing: 0
+    };
+
+    for (let i = 0; i < chars.length; i++) {
+      ctx.fillText(chars[i]!, i * charWidth + (charWidth/2), 7);
+    }
+    this.textures.addCanvas('swarm_font', canvas);
+    this.cache.bitmapFont.add('swarm_font', Phaser.GameObjects.RetroFont.Parse(this, config));
+
 
     // Fallback: Swarm Node
     graphics.fillStyle(0x00f0ff, 1);
@@ -213,13 +258,92 @@ export class GameScene extends Scene {
       }
     };
     this.sys.game.canvas.addEventListener('click', this.canvasClickListener);
+    this.buildCommitButton();
 
     // Run Pre-Flight check
     this.preFlightCheck();
 
     // Initialize the debug panel
     this.buildDebugPanel();
+
+    // Initialize persistent pooled emitter
+    if (!this.pooledVfxEmitter) {
+      this.pooledVfxEmitter = this.add.particles(0, 0, 'particle_dot', {
+        speed: { min: -120, max: 120 },
+        angle: { min: 0, max: 360 },
+        scale: { start: 1.5, end: 0 },
+        blendMode: 'ADD',
+        lifespan: 500,
+        emitting: false,
+      });
+      this.pooledVfxEmitter.setDepth(20);
+    }
   }
+
+
+  private buildCommitButton(): void {
+    const width = this.scale.width;
+    const btnY = this.originY + GRID_PIXELS + 65;
+
+    this.commitButtonBg = this.add.rectangle(width / 2, btnY, 200, 40, 0x06d6a0)
+      .setInteractive({ useHandCursor: true })
+      .setVisible(false);
+
+    this.commitButtonText = this.add.text(width / 2, btnY, 'COMMIT BLUEPRINT', {
+      fontFamily: 'Arial Black, Arial, sans-serif',
+      fontSize: '14px',
+      color: '#000000',
+    }).setOrigin(0.5).setVisible(false);
+
+    this.commitButtonBg.on('pointerdown', () => this.commitStagedBlueprint());
+  }
+
+  private updateCommitButton(): void {
+    if (!this.commitButtonBg || !this.commitButtonText) return;
+    const hasStaged = this.stagedMutations.size > 0;
+    this.commitButtonBg.setVisible(hasStaged);
+    this.commitButtonText.setVisible(hasStaged);
+  }
+
+  private commitStagedBlueprint(): void {
+    if (this.stagedMutations.size === 0) return;
+
+    const mutations = Array.from(this.stagedMutations.values());
+
+    // Disable button while saving
+    if (this.commitButtonBg) this.commitButtonBg.disableInteractive();
+    this.showStatus('COMMITTING BLUEPRINT...', 0xffd166);
+
+    trpc.mutateTilesBatch
+      .mutate({ mutations })
+      .then((result) => {
+        console.log(`[GameScene] TILE_BATCH_MUTATION_SUCCESS: committed ${result.mapped.length} changes`);
+
+        // Remove from staging
+        this.stagedMutations.clear();
+        this.updateCommitButton();
+        this.clearStatus();
+        if (this.commitButtonBg) this.commitButtonBg.setInteractive({ useHandCursor: true });
+
+        result.mapped.forEach((mut) => {
+          const key = `${mut.y},${mut.x}`;
+          this.pendingMutations.delete(key);
+          this.finalizeTile(mut.y, mut.x, mut.state);
+        });
+      })
+      .catch((err) => {
+        console.error('[GameScene] TILE_BATCH_MUTATION failed:', err);
+        this.showStatus('OUT OF ENERGY OR NETWORK ERROR!', ERROR_COLOR);
+        this.time.delayedCall(2000, () => this.clearStatus());
+        if (this.commitButtonBg) this.commitButtonBg.setInteractive({ useHandCursor: true });
+
+        // Revert UI on failure (simplistic approach: just clear staging and refetch)
+        this.stagedMutations.clear();
+        this.updateCommitButton();
+        this.fetchInitialMap(); // Refetch to sync state
+      });
+  }
+
 
   private preFlightCheck(): void {
     trpc.getProfileStatus.query()
@@ -1023,18 +1147,11 @@ export class GameScene extends Scene {
 
 
 
-  private triggerTrapVFX(px: number, py: number): void {
-    const emitter = this.add.particles(px, py, 'particle_dot', {
-      speed: { min: -120, max: 120 },
-      angle: { min: 0, max: 360 },
-      scale: { start: 1.5, end: 0 },
-      blendMode: 'ADD',
-      lifespan: 500,
-      maxParticles: 20,
-    });
-    this.time.delayedCall(600, () => {
-      emitter.destroy();
-    });
+  private triggerTrapVFXPooled(px: number, py: number): void {
+    if (this.pooledVfxEmitter) {
+      this.pooledVfxEmitter.setPosition(px, py);
+      this.pooledVfxEmitter.explode(20); // instantaneous burst of 20 particles
+    }
   }
 
   private fireTowerProjectile(fromX: number, fromY: number, toX: number, toY: number): void {
@@ -1153,9 +1270,10 @@ export class GameScene extends Scene {
     const nextActiveSprites: typeof this.swarmSprites = [];
     const newActiveNodes: typeof this.activeSwarmNodes = [];
 
+
     currentFrame.swarms.forEach((swarm) => {
       // Find closest active sprite from last frame
-      let bestSprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.Text; x: number; y: number; count: number; active: boolean; } | null = null;
+      let bestSprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.BitmapText; x: number; y: number; count: number; active: boolean; } | null = null;
       let minDist = Infinity;
 
       for (const s of this.swarmSprites) {
@@ -1168,7 +1286,7 @@ export class GameScene extends Scene {
         }
       }
 
-      let targetSprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.Text; x: number; y: number; count: number; active: boolean; };
+      let targetSprite: { container: GameObjects.Container; circle: GameObjects.Arc | GameObjects.Sprite; text: GameObjects.BitmapText; x: number; y: number; count: number; active: boolean; };
       let startX = swarm.x;
       let startY = swarm.y;
       let targetScale = 1;
@@ -1211,13 +1329,7 @@ export class GameScene extends Scene {
           const visual = this.add.circle(0, 0, 10, 0x00f0ff).setStrokeStyle(1.5, 0xffffff);
           container.add(visual);
 
-          const txt = this.add.text(0, -18, String(swarm.count), {
-            fontFamily: 'Arial Black, Arial, sans-serif',
-            fontSize: '11px',
-            color: '#ffffff',
-            stroke: '#000000',
-            strokeThickness: 3.5,
-          }).setOrigin(0.5);
+          const txt = this.add.bitmapText(0, -18, 'swarm_font', String(swarm.count), 10).setOrigin(0.5);
           container.add(txt);
 
           targetSprite = {
@@ -1248,7 +1360,7 @@ export class GameScene extends Scene {
       const countDropped = targetSprite.count > swarm.count;
 
       if (isTrapTile || countDropped) {
-        this.triggerTrapVFX(targetPx, targetPy);
+        this.triggerTrapVFXPooled(targetPx, targetPy);
         // Find closest tower to fire projectile
         let closestTower: GameObjects.Container | null = null;
         let minTowerDist = Infinity;
@@ -1648,8 +1760,8 @@ export class GameScene extends Scene {
       const easeProgress = Phaser.Math.Easing.Sine.InOut(clampedProgress);
 
       this.activeSwarmNodes.forEach(node => {
-        const tX = Phaser.Math.Linear(node.startX, node.targetX, easeProgress);
-        const tY = Phaser.Math.Linear(node.startY, node.targetY, easeProgress);
+        const tX = Math.round(Phaser.Math.Linear(node.startX, node.targetX, easeProgress));
+        const tY = Math.round(Phaser.Math.Linear(node.startY, node.targetY, easeProgress));
         node.sprite.container.setPosition(tX, tY);
 
         if (node.startScale !== node.targetScale) {
