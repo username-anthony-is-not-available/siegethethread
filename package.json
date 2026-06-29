@@ -20,8 +20,8 @@
     "node": ">=22.2.0"
   },
   "dependencies": {
-    "@devvit/start": "0.13.5",
-    "@devvit/web": "0.13.5",
+    "@devvit/start": "0.13.6",
+    "@devvit/web": "0.13.6",
     "@hono/node-server": "2.0.6",
     "@trpc/client": "^11.18.0",
     "@trpc/server": "^11.18.0",
