@@ -8,6 +8,8 @@ import {
   isInRange,
   TILE_PATH,
   TILE_WALL,
+  TILE_TOWER,
+  TILE_TRAP,
   TOTAL_TILES,
   type Grid,
 } from '../../shared/grid';
@@ -19,6 +21,8 @@ const GRID_PIXELS = GRID_SIZE * TILE_SIZE;
 
 const WALL_COLOR = 0x222222;
 const PATH_COLOR = 0x555555;
+const TOWER_COLOR = 0x8d99ae;
+const TRAP_COLOR = 0xef233c;
 const PENDING_COLOR = 0xffd166;
 const ERROR_COLOR = 0xef233c;
 const STROKE_COLOR = 0x000000;
@@ -39,6 +43,8 @@ export class GameScene extends Scene {
   private commitButtonBg: GameObjects.Rectangle | null = null;
   private commitButtonText: GameObjects.Text | null = null;
   /** True once the server has responded with the initial map layout */
+  private selectedTool: number = TILE_PATH;
+  private toolHighlight: Phaser.GameObjects.Rectangle | null = null;
   private isMapLoaded = false;
   private exitRequested = false;
   private lastExitEvent: MouseEvent | undefined;
@@ -681,11 +687,55 @@ export class GameScene extends Scene {
     this.exitButtonBg.on('pointerup', () => {
       this.handleExit();
     });
+
+    this.buildToolPalette(width);
   }
 
   // ---------------------------------------------------------------------------
   // Tile interaction
   // ---------------------------------------------------------------------------
+
+
+  private buildToolPalette(width: number): void {
+    if (this.userRole !== 'Defender') return;
+
+    const paletteY = this.originY + GRID_PIXELS + 80;
+    const tools = [
+      { state: TILE_PATH, color: PATH_COLOR, label: 'Path' },
+      { state: TILE_WALL, color: WALL_COLOR, label: 'Wall' },
+      { state: TILE_TOWER, color: TOWER_COLOR, label: 'Tower' },
+      { state: TILE_TRAP, color: TRAP_COLOR, label: 'Trap' }
+    ];
+
+    const btnWidth = 60;
+    const spacing = 10;
+    const totalWidth = tools.length * btnWidth + (tools.length - 1) * spacing;
+    const startX = (width - totalWidth) / 2 + btnWidth / 2;
+
+    this.toolHighlight = this.add.rectangle(startX, paletteY, btnWidth + 4, 34, 0xffd166, 0)
+      .setStrokeStyle(2, 0xffd166);
+
+    tools.forEach((tool, index) => {
+      const x = startX + index * (btnWidth + spacing);
+
+      const btnBg = this.add.rectangle(x, paletteY, btnWidth, 30, tool.color)
+        .setStrokeStyle(1, 0x000000)
+        .setInteractive({ useHandCursor: true });
+
+      this.add.text(x, paletteY, tool.label, {
+        fontFamily: 'Arial, sans-serif',
+        fontSize: '12px',
+        color: '#ffffff'
+      }).setOrigin(0.5);
+
+      btnBg.on('pointerdown', () => {
+        this.selectedTool = tool.state;
+        if (this.toolHighlight) {
+          this.toolHighlight.setPosition(x, paletteY);
+        }
+      });
+    });
+  }
 
   private handleTileClick(row: number, col: number): void {
     // Guard: do nothing if the map isn't loaded yet
@@ -713,7 +763,11 @@ export class GameScene extends Scene {
     }
 
     const currentState = this.grid[row]?.[col] ?? TILE_WALL;
-    const desiredState = currentState === TILE_WALL ? TILE_PATH : TILE_WALL;
+    const desiredState = this.selectedTool;
+
+    if (currentState === desiredState) {
+      return;
+    }
 
     this.setTilePending(row, col);
     this.pendingMutations.add(key);
@@ -882,8 +936,14 @@ export class GameScene extends Scene {
     this.counterLabel.setText(`Total Paths Dug: ${dug} / ${TOTAL_TILES}`);
   }
 
-  private colorForState(state: number): number {
-    return state === TILE_PATH ? PATH_COLOR : WALL_COLOR;
+    private colorForState(state: number): number {
+    switch (state) {
+      case TILE_PATH: return PATH_COLOR;
+      case TILE_TOWER: return TOWER_COLOR;
+      case TILE_TRAP: return TRAP_COLOR;
+      case TILE_WALL:
+      default: return WALL_COLOR;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1182,44 +1242,25 @@ export class GameScene extends Scene {
 
     // Spawn towers and traps dynamically on the board
     this.trapCoords = [];
-    let towerCount = 0;
-
     for (let r = 0; r < GRID_SIZE; r++) {
       for (let c = 0; c < GRID_SIZE; c++) {
-        if (this.grid[r]?.[c] === TILE_WALL && towerCount < 4 && r > 2 && c > 2) {
-          let hasAdjPath = false;
-          const neighbors = [
-            { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 }
-          ];
-          for (const n of neighbors) {
-            if (n.r >= 0 && n.r < GRID_SIZE && n.c >= 0 && n.c < GRID_SIZE) {
-              if (this.grid[n.r]?.[n.c] === TILE_PATH) {
-                hasAdjPath = true;
-                break;
-              }
-            }
-          }
-          if (hasAdjPath) {
-            const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
-            const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
-            const towerContainer = this.add.container(px, py).setDepth(14);
-            const towerBg = this.add.rectangle(0, 0, 24, 32, 0x8d99ae).setStrokeStyle(1.5, 0xd90429);
-            towerContainer.add(towerBg);
-            this.towerSprites.push(towerContainer);
-            towerCount++;
-          }
-        } else if (this.grid[r]?.[c] === TILE_PATH && this.trapCoords.length < 4 && r > 1 && c > 1 && (r !== 15 || c !== 15)) {
-          if ((r + c) % 5 === 0) {
-            const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
-            const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
-            const trapContainer = this.add.container(px, py).setDepth(11);
-            const trapBg = this.add.rectangle(0, 0, 24, 24, 0xef233c, 0.4).setStrokeStyle(2, 0xef233c);
-            trapBg.setScale(0.8);
-            trapBg.setAlpha(0.65);
-            trapContainer.add(trapBg);
-            this.trapIndicators.push(trapContainer);
-            this.trapCoords.push({ x: c, y: r });
-          }
+        if (this.grid[r]?.[c] === TILE_TOWER) {
+          const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
+          const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
+          const towerContainer = this.add.container(px, py).setDepth(14);
+          const towerBg = this.add.rectangle(0, 0, 24, 32, 0x8d99ae).setStrokeStyle(1.5, 0xd90429);
+          towerContainer.add(towerBg);
+          this.towerSprites.push(towerContainer);
+        } else if (this.grid[r]?.[c] === TILE_TRAP) {
+          const px = this.originX + c * TILE_SIZE + TILE_SIZE / 2;
+          const py = this.originY + r * TILE_SIZE + TILE_SIZE / 2;
+          const trapContainer = this.add.container(px, py).setDepth(11);
+          const trapBg = this.add.rectangle(0, 0, 24, 24, 0xef233c, 0.4).setStrokeStyle(2, 0xef233c);
+          trapBg.setScale(0.8);
+          trapBg.setAlpha(0.65);
+          trapContainer.add(trapBg);
+          this.trapIndicators.push(trapContainer);
+          this.trapCoords.push({ x: c, y: r });
         }
       }
     }
@@ -1291,7 +1332,7 @@ export class GameScene extends Scene {
       let startY = swarm.y;
       let targetScale = 1;
       let startScale = 1;
-      let targetAlpha = 1;
+      const targetAlpha = 1;
       let startAlpha = 1;
 
       if (bestSprite && minDist <= 1.5) {
