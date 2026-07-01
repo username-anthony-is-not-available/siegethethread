@@ -14,18 +14,13 @@ import {
   type Grid,
 } from '../../shared/grid';
 import { trpc } from '../trpc';
+import { THEME } from '../theme';
 import type { PlayerClass, PlayerRole } from '../../shared/protocol';
 
 const TILE_SIZE = 32;
 const GRID_PIXELS = GRID_SIZE * TILE_SIZE;
 
-const WALL_COLOR = 0x222222;
-const PATH_COLOR = 0x555555;
-const TOWER_COLOR = 0x8d99ae;
-const TRAP_COLOR = 0xef233c;
-const PENDING_COLOR = 0xffd166;
-const ERROR_COLOR = 0xef233c;
-const STROKE_COLOR = 0x000000;
+
 
 const MODE_LABEL = 'Build Mode: Tap to Dig';
 
@@ -244,7 +239,7 @@ export class GameScene extends Scene {
   create(): void {
     const width = this.scale.width;
     const height = this.scale.height;
-    this.cameras.main.setBackgroundColor(0x0b0d12);
+    this.cameras.main.setBackgroundColor(THEME.COLORS.BACKGROUND);
 
     this.originX = Math.round((width - GRID_PIXELS) / 2);
     this.originY = Math.round((height - GRID_PIXELS) / 2);
@@ -339,7 +334,7 @@ export class GameScene extends Scene {
       })
       .catch((err) => {
         console.error('[GameScene] TILE_BATCH_MUTATION failed:', err);
-        this.showStatus('OUT OF ENERGY OR NETWORK ERROR!', ERROR_COLOR);
+        this.showStatus('OUT OF ENERGY OR NETWORK ERROR!', THEME.COLORS.ERROR);
         this.time.delayedCall(2000, () => this.clearStatus());
         if (this.commitButtonBg) this.commitButtonBg.setInteractive({ useHandCursor: true });
 
@@ -367,7 +362,7 @@ export class GameScene extends Scene {
       })
       .catch((err) => {
         console.error('[GameScene] Profile status check failed:', err);
-        this.showStatus('Profile check failed. Tap to retry.', ERROR_COLOR);
+        this.showStatus('Profile check failed. Tap to retry.', THEME.COLORS.ERROR);
         this.input.once('pointerdown', () => this.preFlightCheck());
       });
   }
@@ -546,7 +541,7 @@ export class GameScene extends Scene {
       })
       .catch((err) => {
         console.error('[GameScene] Failed to initialize profile:', err);
-        this.showStatus('Failed to create profile. Try again.', ERROR_COLOR);
+        this.showStatus('Failed to create profile. Try again.', THEME.COLORS.ERROR);
         submitBtn.setInteractive({ useHandCursor: true });
       });
     });
@@ -574,7 +569,7 @@ export class GameScene extends Scene {
       .catch((err: unknown) => {
         const httpStatus = (err as { shape?: { data?: { httpStatus?: number } } }).shape?.data?.httpStatus ?? 'unknown';
         console.error(`[GameScene] Load failed (HTTP: ${httpStatus}):`, err);
-        this.showStatus('Map not found. Tap to retry.', ERROR_COLOR);
+        this.showStatus('Map not found. Tap to retry.', THEME.COLORS.ERROR);
         this.input.once('pointerdown', () => this.fetchInitialMap());
       });
   }
@@ -604,7 +599,7 @@ export class GameScene extends Scene {
         const y = this.originY + row * TILE_SIZE + TILE_SIZE / 2;
         const tile = this.add
           .rectangle(x, y, TILE_SIZE - 1, TILE_SIZE - 1, this.colorForState(state))
-          .setStrokeStyle(1, STROKE_COLOR, 0.25)
+          .setStrokeStyle(1, THEME.COLORS.STROKE, 0.25)
           .setInteractive({ useHandCursor: true });
         tile.on('pointerdown', () => {
           this.handleTileClick(row, col);
@@ -701,10 +696,10 @@ export class GameScene extends Scene {
 
     const paletteY = this.originY + GRID_PIXELS + 80;
     const tools = [
-      { state: TILE_PATH, color: PATH_COLOR, label: 'Path' },
-      { state: TILE_WALL, color: WALL_COLOR, label: 'Wall' },
-      { state: TILE_TOWER, color: TOWER_COLOR, label: 'Tower' },
-      { state: TILE_TRAP, color: TRAP_COLOR, label: 'Trap' }
+      { state: TILE_PATH, color: THEME.COLORS.PATH, label: 'Path' },
+      { state: TILE_WALL, color: THEME.COLORS.WALL, label: 'Wall' },
+      { state: TILE_TOWER, color: THEME.COLORS.TOWER, label: 'Tower' },
+      { state: TILE_TRAP, color: THEME.COLORS.TRAP, label: 'Trap' }
     ];
 
     const btnWidth = 60;
@@ -751,13 +746,13 @@ export class GameScene extends Scene {
     }
 
     if (this.userRole !== 'Defender') {
-      this.showStatus('ONLY DEFENDERS CAN DIG!', ERROR_COLOR);
+      this.showStatus('ONLY DEFENDERS CAN DIG!', THEME.COLORS.ERROR);
       this.time.delayedCall(1500, () => this.clearStatus());
       return;
     }
 
     if (this.remainingAp <= 0) {
-      this.showStatus('OUT OF ENERGY!', ERROR_COLOR);
+      this.showStatus('OUT OF ENERGY!', THEME.COLORS.ERROR);
       this.time.delayedCall(1500, () => this.clearStatus());
       return;
     }
@@ -790,7 +785,7 @@ export class GameScene extends Scene {
       .catch((err: unknown) => {
         console.error(`[GameScene] TILE_MUTATION failed for (${col}, ${row}):`, err);
         
-        this.showStatus('OUT OF ENERGY OR WRONG ROLE!', ERROR_COLOR);
+        this.showStatus('OUT OF ENERGY OR WRONG ROLE!', THEME.COLORS.ERROR);
         this.time.delayedCall(2000, () => this.clearStatus());
 
         const revertRow = this.grid[row];
@@ -834,7 +829,7 @@ export class GameScene extends Scene {
     if (!tile) {
       return;
     }
-    tile.setFillStyle(PENDING_COLOR, 0.5);
+    tile.setFillStyle(THEME.COLORS.PENDING, 0.5);
     this.tweens.add({
       targets: tile,
       alpha: 0.65,
@@ -873,7 +868,7 @@ export class GameScene extends Scene {
     }
     this.tweens.killTweensOf(tile);
     tile.setAlpha(1);
-    tile.setFillStyle(ERROR_COLOR);
+    tile.setFillStyle(THEME.COLORS.ERROR);
     this.tweens.add({
       targets: tile,
       alpha: 0,
@@ -938,11 +933,11 @@ export class GameScene extends Scene {
 
     private colorForState(state: number): number {
     switch (state) {
-      case TILE_PATH: return PATH_COLOR;
-      case TILE_TOWER: return TOWER_COLOR;
-      case TILE_TRAP: return TRAP_COLOR;
+      case TILE_PATH: return THEME.COLORS.PATH;
+      case TILE_TOWER: return THEME.COLORS.TOWER;
+      case TILE_TRAP: return THEME.COLORS.TRAP;
       case TILE_WALL:
-      default: return WALL_COLOR;
+      default: return THEME.COLORS.WALL;
     }
   }
 
@@ -1048,7 +1043,7 @@ export class GameScene extends Scene {
         })
         .catch((err) => {
           console.error('[Debug] Failed to toggle role:', err);
-          this.showStatus('Debug failed', ERROR_COLOR);
+          this.showStatus('Debug failed', THEME.COLORS.ERROR);
         });
     });
     this.debugPanel.add(toggleBtn);
@@ -1073,7 +1068,7 @@ export class GameScene extends Scene {
         })
         .catch((err) => {
           console.error('[Debug] Failed to refill energy:', err);
-          this.showStatus('Debug failed', ERROR_COLOR);
+          this.showStatus('Debug failed', THEME.COLORS.ERROR);
         });
     });
     this.debugPanel.add(refillBtn);
@@ -1119,7 +1114,7 @@ export class GameScene extends Scene {
         .catch((err) => {
           console.error('[Debug] Failed to run matchmaker simulation:', err);
           overlayController.cancel();
-          this.showStatus('Debug failed', ERROR_COLOR);
+          this.showStatus('Debug failed', THEME.COLORS.ERROR);
           this.time.delayedCall(1500, () => this.clearStatus());
         });
 
@@ -1160,7 +1155,7 @@ export class GameScene extends Scene {
         })
         .catch((err) => {
           console.error('[Debug] Failed to execute full reset:', err);
-          this.showStatus('Reset failed', ERROR_COLOR);
+          this.showStatus('Reset failed', THEME.COLORS.ERROR);
           this.time.delayedCall(1500, () => this.clearStatus());
         });
     });

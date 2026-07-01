@@ -1,10 +1,9 @@
 import * as Phaser from 'phaser';
-import { Boot } from './scenes/Boot';
+import { BootScene } from './scenes/BootScene';
+import { OnboardingScene } from './scenes/OnboardingScene';
 import { GameScene } from './scenes/GameScene';
+import { CinematicScene } from './scenes/CinematicScene';
 
-// Strict mobile portrait aspect ratio (9:16). The internal resolution is
-// fixed and scaled with Phaser.Scale.FIT so the blueprint grid never clips or
-// scrolls inside a reddit.com inline / expanded mobile frame.
 const GAME_WIDTH = 576;
 const GAME_HEIGHT = 1024;
 
@@ -25,7 +24,7 @@ const config: Phaser.Types.Core.GameConfig = {
       debug: false,
     },
   },
-  scene: [Boot, GameScene],
+  scene: [BootScene, OnboardingScene, GameScene, CinematicScene],
 };
 
 export function StartGame(parent: string): Phaser.Game {
